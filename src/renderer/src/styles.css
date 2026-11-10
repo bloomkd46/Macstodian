@@ -277,7 +277,7 @@ h1 {
 }
 .stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border: 1px solid var(--border);
   border-radius: 11px;
   background: var(--surface);
@@ -951,6 +951,15 @@ input[type='checkbox']:disabled:checked::after {
   }
   h1 {
     font-size: 25px;
+  }
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stats > div:nth-child(3) {
+    border-left: 0;
+  }
+  .stats > div:nth-child(n + 3) {
+    border-top: 1px solid var(--border-soft);
   }
   .stats > div {
     padding: 20px 15px;
