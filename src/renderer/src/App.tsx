@@ -251,6 +251,7 @@ export function App() {
 
   return (
     <div className="shell">
+      <div className="window-drag-strip" aria-hidden="true" />
       <aside className="sidebar" inert={modal || undefined}>
         <div className="brand">
           <div className="brand-mark">

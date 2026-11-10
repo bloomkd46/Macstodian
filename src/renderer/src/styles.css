@@ -134,6 +134,16 @@ svg {
   display: flex;
   min-height: 100vh;
 }
+/* Keep a title-bar-sized drag target across the window, above all content. */
+.window-drag-strip {
+  position: fixed;
+  inset: 0 0 auto;
+  height: 44px;
+  z-index: 5;
+  -webkit-app-region: drag;
+  user-select: none;
+  background: linear-gradient(to right, var(--sidebar) 229px, var(--canvas) 229px);
+}
 .sidebar {
   width: 229px;
   position: fixed;
@@ -887,6 +897,9 @@ input[type='checkbox'] {
   border: 0;
 }
 @media (max-width: 1200px) {
+  .window-drag-strip {
+    background: linear-gradient(to right, var(--sidebar) 200px, var(--canvas) 200px);
+  }
   .sidebar {
     width: 200px;
     padding-inline: 14px;
