@@ -1,44 +1,8 @@
 import type { InstalledApp, Category, Confidence } from '../shared/api'
 import { basename } from 'node:path'
 
-// Deliberately small and exact. No substring, fuzzy, or vendor-prefix deletion matches.
-// Vendor directories are always shared/protected, even if only one app is installed.
-export const KNOWN_ALIASES = [
-  { name: 'Code', ids: ['com.microsoft.VSCode'] },
-  { name: 'Slack', ids: ['com.tinyspeck.slackmacgap'] },
-  { name: 'discord', ids: ['com.hnc.Discord'] },
-  { name: 'Spotify', ids: ['com.spotify.client'] },
-  { name: 'Firefox', ids: ['org.mozilla.firefox'] }
-] as const
-export const SHARED_NAMES = [
-  'Google',
-  'Microsoft',
-  'Adobe',
-  'Autodesk',
-  'Apple',
-  'Mozilla',
-  'CrashReporter',
-  'ByHost',
-  'CloudKit',
-  'com.apple.sharedfilelist',
-  'BraveSoftware',
-  'Citrix',
-  'Bitdefender',
-  'Netgear',
-  'OpenAI',
-  '4kdownload.com',
-  'Raspberry Pi'
-]
-const SHARED_DOMAINS: Record<string, string[]> = {
-  bravesoftware: ['com.brave.'],
-  citrix: ['com.citrix.'],
-  bitdefender: ['com.bitdefender.', 'com.netgear.'],
-  netgear: ['com.netgear.'],
-  openai: ['com.openai.'],
-  '4kdownload.com': ['com.openmedia.', 'com.4kdownload.'],
-  'raspberry pi': ['org.raspberrypi.'],
-  mozilla: ['org.mozilla.']
-}
+// These are generic data/framework terms and macOS infrastructure, not product aliases.
+const RUNTIME_NAMES = new Set(['electron', 'cef'])
 const GENERIC_NAMES = new Set([
   'data',
   'cache',
@@ -52,215 +16,392 @@ const GENERIC_NAMES = new Set([
   'tmp',
   'shared',
   'containers',
-  'electron',
-  'cef'
+  ...RUNTIME_NAMES
 ])
 const SYSTEM_NAMES = new Set(['.globalpreferences', 'nsglobaldomain', 'loginwindow', '.ds_store'])
+const PRODUCT_ROLES = new Set(['app', 'desktop', 'launcher', 'client', 'browser'])
+const UNINFORMATIVE_NAMES = new Set([
+  ...GENERIC_NAMES,
+  'helper',
+  'updater',
+  'installer',
+  'uninstaller',
+  'editor',
+  'software',
+  'service',
+  'core',
+  'agent',
+  'renderer',
+  'gpu',
+  'mac',
+  'macos',
+  'com',
+  'org',
+  'net'
+])
+const sharedInfrastructure =
+  /^(?:byhost|cloudkit|(?:crash|diagnostic)(?:reporter|reports?)(?:\p{L})*|shared\p{L}*)$/u
+const companySuffix = /(?:software|incorporated|corporation|company|corp|inc|llc|ltd)$/
+const serviceSuffix =
+  /^(?:(?:standalone|auto|background)?(?:install(?:er|ation)?|updat(?:e|er)|helper|agent|service|daemon|launcher|channel|menu|renderer|gpu|settings|preferences|config|logs?))+\d*$/
 
-// Compare words rather than arbitrary substrings. Camel case and punctuation are
-// common differences between bundle metadata and cross-platform data directories.
+export interface OwnershipCandidate {
+  name: string
+  category: Category
+}
+interface OwnershipMatch {
+  ownerIds: string[]
+  confidence: Confidence
+  reason: string
+  protected: boolean
+}
+interface AppMetadata {
+  app: InstalledApp
+  names: string[]
+  fullNames: string[]
+  namespace: string | null
+}
+interface Vendor {
+  namespace: string
+  key: string
+  owners: InstalledApp[]
+}
+
 const words = (value: string) =>
   value
     .normalize('NFKC')
+    .replace(/\+/g, ' Plus ')
     .replace(/([\p{Ll}\d])(\p{Lu})/gu, '$1 $2')
     .replace(/(\p{Lu})(\p{Lu}\p{Ll})/gu, '$1 $2')
+    .replace(/(\p{L})(\d+)/gu, '$1 $2')
     .toLowerCase()
     .match(/[\p{L}\p{N}]+/gu) ?? []
 const compact = (value: string) => words(value).join('')
-const PRODUCT_ROLES = new Set(['app', 'desktop', 'launcher', 'client', 'browser'])
-const usableName = (name: string) =>
-  compact(name).length > 0 &&
-  !GENERIC_NAMES.has(name.toLowerCase()) &&
-  !['app', 'helper', 'updater', 'client', 'desktop', 'browser', 'editor', 'software'].includes(
-    compact(name)
+const genericKeys = new Set([...UNINFORMATIVE_NAMES].map(compact))
+const systemKeys = new Set([...SYSTEM_NAMES].map(compact))
+const usableName = (value: string) => !!compact(value) && !genericKeys.has(compact(value))
+const keyFor = ({ name, category }: OwnershipCandidate) =>
+  name.replace(
+    category === 'preferences' ? /\.plist$/i : category === 'savedState' ? /\.savedState$/i : /$^/,
+    ''
   )
+// Bundle IDs have no universal TLD allowlist. Require two namespace labels and a
+// product component; names alone never establish exclusive ownership.
+const identifier = (value: string) => {
+  const match = /^([a-z][a-z0-9-]*\.[a-z0-9][a-z0-9-]*)\.(.+)$/i.exec(
+    value.replace(/^(?:system)?group\./i, '')
+  )
+  return match ? { namespace: match[1]!.toLowerCase(), product: match[2]! } : null
+}
+const namespaceVendor = (namespace: string) => compact(namespace.split('.')[1]!)
+const reusableNamespace = (namespace: string) =>
+  namespace !== 'com.apple' &&
+  !genericKeys.has(namespaceVendor(namespace)) &&
+  !/^install\d+[a-z]*$/.test(namespaceVendor(namespace))
+const namePrefixLength = (value: string, names: string[], identifierSuffix = false) => {
+  const normalized = compact(value)
+  const boundaries = new Set(
+    words(value).map((_, index, tokens) => tokens.slice(0, index + 1).join(''))
+  )
+  let longest = 0
+  for (const name of names) {
+    const base = compact(name)
+    if (base.length < 3 || !normalized.startsWith(base)) continue
+    if (
+      boundaries.has(base) ||
+      (identifierSuffix && serviceSuffix.test(normalized.slice(base.length)))
+    )
+      longest = Math.max(longest, base.length)
+  }
+  return longest
+}
+const completeProduct = (product: string, fullNames: string[]) =>
+  product.length >= 8 &&
+  fullNames.some((name) => {
+    const base = compact(name)
+    return (
+      base === product ||
+      (base.length >= 4 && [...PRODUCT_ROLES].some((role) => product === base + role))
+    )
+  })
+const uniqueApps = (apps: InstalledApp[]) => [...new Map(apps.map((app) => [app.id, app])).values()]
+const related = (owners: InstalledApp[], evidence: string): OwnershipMatch => ({
+  ownerIds: uniqueApps(owners).map((app) => app.id),
+  confidence: 'related',
+  protected: true,
+  reason: `${evidence}: ${uniqueApps(owners)
+    .map((app) => app.name)
+    .join(', ')}. Possible relation only; protected and excluded from app totals.`
+})
+const shared = (vendors: Vendor[], evidence: string): OwnershipMatch => ({
+  ownerIds: uniqueApps(vendors.flatMap((vendor) => vendor.owners)).map((app) => app.id),
+  confidence: 'shared',
+  protected: true,
+  reason: `${evidence} (${[...new Set(vendors.map((vendor) => vendor.namespace))].join(', ')}). Vendor-family context can include other or uninstalled products; counted once, protected, and excluded from app totals.`
+})
 
-export function createOwnershipMatcher(apps: InstalledApp[]) {
-  const metadata = apps
+export function createOwnershipMatcher(
+  apps: InstalledApp[],
+  candidates: OwnershipCandidate[] = []
+) {
+  const metadata: AppMetadata[] = apps
     .filter((app) => app.bundleId)
     .map((app) => {
-      const parts = app.bundleId!.toLowerCase().split('.')
-      const names = new Set([
-        app.name,
-        basename(app.path).replace(/\.app$/i, ''),
-        ...(app.ownershipNames ?? [])
-      ])
-      // Product identifiers can retain names omitted from the display name.
-      if (parts.length >= 3 && compact(parts.at(-1)!).length >= 4 && usableName(parts.at(-1)!))
-        names.add(parts.at(-1)!)
+      const id = identifier(app.bundleId!)
+      const fullNames = [
+        ...new Set([
+          app.name,
+          basename(app.path).replace(/\.app$/i, ''),
+          ...(app.ownershipNames ?? [])
+        ])
+      ].filter(usableName)
+      const names = new Set(fullNames)
+      if (id) {
+        const domain = id.namespace.split('.').reverse().join('.')
+        if (fullNames.some((name) => name.toLowerCase() === domain))
+          names.add(namespaceVendor(id.namespace))
+      }
+      const product = app.bundleId!.split('.').at(-1)!
+      if (compact(product).length >= 4 && usableName(product)) names.add(product)
       for (const name of [...names]) {
         const tokens = words(name)
         if (PRODUCT_ROLES.has(tokens.at(-1) ?? '')) names.add(tokens.slice(0, -1).join(' '))
+        // Vendor-qualified names also expose a product stem within that namespace.
+        if (id) {
+          const vendor = namespaceVendor(id.namespace)
+          const end = tokens.findIndex((_, index) => tokens.slice(0, index + 1).join('') === vendor)
+          if (end >= 0) names.add(tokens.slice(end + 1).join(' '))
+        }
       }
       return {
         app,
         names: [...names].filter(usableName),
-        namespace: parts.length >= 3 ? parts.slice(0, 2).join('.') : null,
-        vendor: parts.length >= 3 ? parts[1]! : null
+        fullNames,
+        namespace: id?.namespace ?? null
       }
     })
-  return (name: string, category: Category) => match(name, category, apps, metadata)
+  const vendors = new Map<string, Vendor>()
+  const addVendor = (namespace: string, owners: InstalledApp[] = []) => {
+    if (!reusableNamespace(namespace)) return
+    const prior = vendors.get(namespace)
+    vendors.set(namespace, {
+      namespace,
+      key: namespaceVendor(namespace),
+      owners: uniqueApps([...(prior?.owners ?? []), ...owners])
+    })
+  }
+  for (const entry of metadata) if (entry.namespace) addVendor(entry.namespace, [entry.app])
+  // The direct-child inventory supplies vendor evidence even when no app remains
+  // installed (e.g. a plain vendor folder alongside its reverse-domain preferences).
+  for (const candidate of candidates) {
+    const id = identifier(keyFor(candidate))
+    if (!id) continue
+    const knownNamespace = metadata.some((entry) => entry.namespace === id.namespace)
+    addVendor(id.namespace)
+    if (knownNamespace) continue
+    // Learn an alternate namespace only from a complete, distinctive product name.
+    // Never spread a product match across a generic runtime's namespace.
+    const product = compact(id.product)
+    if (product.length < 8 || !reusableNamespace(id.namespace)) continue
+    const owners = metadata.filter(({ fullNames }) => completeProduct(product, fullNames))
+    if (owners.length === 1) addVendor(id.namespace, [owners[0]!.app])
+  }
+  const identifiers = metadata.flatMap(({ app }) =>
+    [app.bundleId!, ...(app.helperBundleIds ?? [])].map((id) => ({ app, id: id.toLowerCase() }))
+  )
+
+  return (name: string, category: Category): OwnershipMatch => {
+    const key = keyFor({ name, category }),
+      lower = key.toLowerCase(),
+      normalized = compact(key)
+    if (genericKeys.has(normalized) || systemKeys.has(normalized))
+      return {
+        ownerIds: [],
+        confidence: 'uncertain',
+        protected: true,
+        reason:
+          'Generic, framework, or system name; ownership is uncertain and this item is protected.'
+      }
+    const exact = metadata
+      .filter(({ app }) => app.bundleId!.toLowerCase() === lower)
+      .map(({ app }) => app)
+    if (exact.length)
+      return {
+        ownerIds: exact.map((app) => app.id),
+        confidence: exact.length > 1 ? 'shared' : 'exact',
+        protected: exact.length > 1 || exact.some((app) => app.protected),
+        reason:
+          exact.length > 1
+            ? `Exact bundle ID ${key} belongs to multiple installed bundles; counted once.`
+            : `Exact bundle ID: ${exact[0]!.bundleId}.`
+      }
+    if (sharedInfrastructure.test(normalized))
+      return {
+        ownerIds: [],
+        confidence: 'shared',
+        protected: true,
+        reason: 'Shared macOS infrastructure or diagnostic directory; counted once and protected.'
+      }
+    const helpers = metadata.filter(({ app }) =>
+      app.helperBundleIds?.some((id) => id.toLowerCase() === lower)
+    )
+    if (helpers.length)
+      return {
+        ...related(
+          helpers.map(({ app }) => app),
+          `Exact embedded helper ID (${key})`
+        ),
+        confidence: helpers.length > 1 ? 'shared' : 'related'
+      }
+    const extended = identifiers.filter(
+      ({ id }) =>
+        lower.startsWith(`${id}.`) ||
+        (category === 'preferences' &&
+          lower.startsWith(`${id}_`) &&
+          /\.sqlite3?(?:-(?:wal|shm))?$/i.test(key))
+    )
+    if (extended.length) {
+      const length = Math.max(...extended.map(({ id }) => id.length))
+      return related(
+        extended.filter(({ id }) => id.length === length).map(({ app }) => app),
+        `Identifier extends a complete installed app ID (${extended.find(({ id }) => id.length === length)!.id})`
+      )
+    }
+    const id = identifier(key)
+    const vendorPrefixed = [...vendors.values()].filter(
+      (vendor) => vendor.owners.length && lower.startsWith(`${vendor.key}.`)
+    )
+    if (vendorPrefixed.length)
+      return shared(vendorPrefixed, 'Vendor-prefixed data or log name inferred from installed IDs')
+    if (id) {
+      if (id.namespace === 'com.apple' && sharedInfrastructure.test(compact(id.product)))
+        return {
+          ownerIds: [],
+          confidence: 'shared',
+          protected: true,
+          reason: 'Shared Apple system infrastructure; counted once and protected.'
+        }
+      if (id.namespace === 'com.apple')
+        return {
+          ownerIds: [],
+          confidence: 'uncertain',
+          protected: true,
+          reason:
+            'Apple system identifier without an identified installed owner; protected from removal.'
+        }
+      if (RUNTIME_NAMES.has(compact(id.product)))
+        return {
+          ownerIds: [],
+          confidence: 'uncertain',
+          protected: true,
+          reason:
+            'Generic runtime identifier without product-specific ownership evidence; protected.'
+        }
+      // Prefer a product stem inside the same namespace before considering its family.
+      const sameNamespace = metadata.filter((entry) => entry.namespace === id.namespace)
+      const productMatches = sameNamespace.map((entry) => ({
+        ...entry,
+        length: namePrefixLength(id.product, entry.names, true)
+      }))
+      const longest = Math.max(0, ...productMatches.map(({ length }) => length))
+      if (longest)
+        return related(
+          productMatches.filter(({ length }) => length === longest).map(({ app }) => app),
+          `Product stem with a version/helper suffix in the installed namespace (${id.namespace})`
+        )
+      // A fully spelled product name can survive a vendor/domain change.
+      const product = compact(id.product)
+      const renamed = metadata.filter(({ fullNames }) => completeProduct(product, fullNames))
+      if (renamed.length)
+        return related(
+          renamed.map(({ app }) => app),
+          `Complete product name under an alternate namespace (${key})`
+        )
+      const vendor = vendors.get(id.namespace)
+      if (vendor?.owners.length) {
+        // A one-product vendor's installer/updater can be suggested directly.
+        // Merely being the only app in a namespace is insufficient evidence.
+        const brandApp = sameNamespace.filter(
+          ({ app, fullNames }) =>
+            vendor.owners.length === 1 &&
+            vendor.owners[0]!.id === app.id &&
+            fullNames.some((name) => compact(name) === vendor.key)
+        )
+        if (brandApp.length && serviceSuffix.test(product))
+          return related(
+            brandApp.map(({ app }) => app),
+            `Installer/helper role under the app's own brand namespace (${id.namespace})`
+          )
+        return shared(
+          [vendor],
+          'Reverse-domain namespace inferred from installed apps or scanned identifiers'
+        )
+      }
+    }
+    const companyKey = normalized.replace(companySuffix, '')
+    const namedCompanies = [...vendors.values()].filter(
+      (vendor) =>
+        lower === vendor.namespace || (companyKey !== normalized && companyKey === vendor.key)
+    )
+    if (namedCompanies.length)
+      return shared(
+        namedCompanies,
+        'Vendor namespace or company-style folder inferred from scan identifiers'
+      )
+    const exactNames = metadata.filter(({ names }) =>
+      names.some((name) => compact(name) === normalized)
+    )
+    if (exactNames.length)
+      return related(
+        exactNames.map(({ app }) => app),
+        `Normalized installed product name (${key})`
+      )
+    const prefixes = metadata.map((entry) => ({
+      ...entry,
+      length: namePrefixLength(key, entry.names)
+    }))
+    const longest = Math.max(0, ...prefixes.map(({ length }) => length))
+    if (longest)
+      return related(
+        prefixes.filter(({ length }) => length === longest).map(({ app }) => app),
+        `App name followed by a word or version suffix (${key})`
+      )
+    const vendorName = normalized.replace(companySuffix, '')
+    const forwardDomain = /^([a-z0-9-]+)\.([a-z][a-z0-9-]+)$/i.exec(key)
+    const matchingVendors = [...vendors.values()].filter(
+      (vendor) =>
+        lower === vendor.namespace ||
+        vendor.key === vendorName ||
+        (forwardDomain &&
+          vendor.namespace === `${forwardDomain[2]}.${forwardDomain[1]}`.toLowerCase()) ||
+        namePrefixLength(key, [vendor.key]) > 0
+    )
+    if (matchingVendors.length)
+      return shared(matchingVendors, 'Vendor name/domain inferred from the scan inventory')
+    // A company-style suffix itself is shared-directory evidence, without an app claim.
+    if (companySuffix.test(normalized) && vendorName.length >= 3)
+      return {
+        ownerIds: [],
+        confidence: 'shared',
+        protected: true,
+        reason:
+          'Company-style directory name without an identified installed owner; shared context only, counted once and protected.'
+      }
+    return {
+      ownerIds: [],
+      confidence: 'unmatched',
+      protected: false,
+      reason:
+        'No installed owner or possible relation identified by bundle IDs, product-name patterns, or scanned vendor namespaces.'
+    }
+  }
 }
 
-export function matchOwnership(name: string, category: Category, apps: InstalledApp[]) {
-  return createOwnershipMatcher(apps)(name, category)
-}
-
-function match(
+export function matchOwnership(
   name: string,
   category: Category,
   apps: InstalledApp[],
-  metadata: {
-    app: InstalledApp
-    names: string[]
-    namespace: string | null
-    vendor: string | null
-  }[]
-): { ownerIds: string[]; confidence: Confidence; reason: string; protected: boolean } {
-  const key = name.replace(
-    category === 'preferences' ? /\.plist$/i : category === 'savedState' ? /\.savedState$/i : /$^/,
-    ''
-  )
-  if (GENERIC_NAMES.has(key.toLowerCase()) || SYSTEM_NAMES.has(key.toLowerCase()))
-    return {
-      ownerIds: [],
-      confidence: 'uncertain',
-      reason: 'Generic or system name; ownership is uncertain and this item is protected.',
-      protected: true
-    }
-  const shared = SHARED_NAMES.find((alias) => alias.toLowerCase() === key.toLowerCase())
-  if (shared) {
-    const vendor = shared.toLowerCase()
-    const domains = SHARED_DOMAINS[vendor] ?? [`com.${vendor}.`]
-    const owners = apps.filter((app) =>
-      domains.some((domain) => app.bundleId?.toLowerCase().startsWith(domain))
-    )
-    return {
-      ownerIds: owners.map((app) => app.id),
-      confidence: 'shared',
-      reason: `Known shared or system directory (${shared}); counted once and protected.`,
-      protected: true
-    }
-  }
-  const exact = apps.filter((app) => app.bundleId?.toLowerCase() === key.toLowerCase())
-  if (exact.length)
-    return {
-      ownerIds: exact.map((app) => app.id),
-      confidence: exact.length > 1 ? 'shared' : 'exact',
-      reason:
-        exact.length > 1
-          ? `Exact bundle ID ${key} belongs to multiple installed bundles; counted once.`
-          : `Exact bundle ID: ${exact[0]!.bundleId}.`,
-      protected: exact.length > 1 || exact.some((app) => app.protected)
-    }
-  const alias = KNOWN_ALIASES.find((entry) => entry.name.toLowerCase() === key.toLowerCase())
-  if (alias) {
-    const owners = apps.filter((app) =>
-      alias.ids.some((id) => id.toLowerCase() === app.bundleId?.toLowerCase())
-    )
-    if (owners.length)
-      return {
-        ownerIds: owners.map((app) => app.id),
-        confidence: owners.length > 1 ? 'shared' : 'alias',
-        reason: `Audited alias: ${alias.name} → ${alias.ids.join(', ')}.`,
-        protected: owners.length > 1 || owners.some((app) => app.protected)
-      }
-  }
-  // Embedded app/extension/XPC identities establish a relationship, not exclusive ownership.
-  // The same helper can ship in multiple products, including apps outside the scan roots.
-  const helpers = apps.filter(
-    (app) =>
-      app.bundleId && app.helperBundleIds?.some((id) => id.toLowerCase() === key.toLowerCase())
-  )
-  if (helpers.length)
-    return {
-      ownerIds: helpers.map((app) => app.id),
-      confidence: helpers.length > 1 ? 'shared' : 'related',
-      reason: `Exact embedded helper bundle ID: ${key}; found inside ${helpers.map((app) => app.name).join(', ')}. Protected and excluded from app totals.`,
-      protected: true
-    }
-  // Require a full installed ID and a separator; never match vendor prefixes or partial tokens.
-  // Only suggest the most specific ID when an installed app and its helper overlap.
-  const identifiers = apps
-    .flatMap((app) =>
-      app.bundleId
-        ? [app.bundleId, ...(app.helperBundleIds ?? [])].map((id) => ({
-            app,
-            id: id.toLowerCase()
-          }))
-        : []
-    )
-    .filter(
-      ({ id }) =>
-        key.toLowerCase().startsWith(`${id}.`) ||
-        (category === 'preferences' &&
-          key.toLowerCase().startsWith(`${id}_`) &&
-          /\.sqlite3?(?:-(?:wal|shm))?$/i.test(key))
-    )
-  if (identifiers.length) {
-    const length = Math.max(...identifiers.map(({ id }) => id.length))
-    const owners = [
-      ...new Set(identifiers.filter(({ id }) => id.length === length).map(({ app }) => app))
-    ]
-    return {
-      ownerIds: owners.map((app) => app.id),
-      confidence: 'related',
-      reason: `Identifier extends an installed app or embedded helper ID (${identifiers.find(({ id }) => id.length === length)!.id}). Possible helper, updater, or settings data; protected and excluded from app totals.`,
-      protected: true
-    }
-  }
-  // Exact normalized names outrank prefixes (e.g. stable versus an installed beta).
-  const normalized = compact(key)
-  const exactNames = metadata.filter(({ names }) =>
-    names.some((name) => compact(name) === normalized)
-  )
-  const prefixes = metadata.flatMap(({ app, names }) =>
-    names.flatMap((name) => {
-      const base = compact(name)
-      if (base.length < 3 || !normalized.startsWith(base)) return []
-      const keyWords = words(key)
-      // Require an actual word boundary; "Code" must not match "Codec".
-      const boundary = keyWords.some((_, index) => keyWords.slice(0, index + 1).join('') === base)
-      return boundary ? [{ app, length: base.length }] : []
-    })
-  )
-  const longest = Math.max(0, ...prefixes.map(({ length }) => length))
-  const named = exactNames.length
-    ? exactNames.map(({ app }) => app)
-    : [...new Set(prefixes.filter(({ length }) => length === longest).map(({ app }) => app))]
-  if (named.length)
-    return {
-      ownerIds: named.map((app) => app.id),
-      confidence: 'related',
-      reason: `Possible relation by ${exactNames.length ? 'normalized product name' : 'app name followed by a word or version suffix'} (${key}): ${named.map((app) => app.name).join(', ')}. Inferred from installed bundle metadata; protected and excluded from app totals.`,
-      protected: true
-    }
-  // Discover vendor folders from installed reverse-domain IDs, without assigning
-  // a vendor's other products exclusively to the one app that happens to be installed.
-  const vendors = metadata.filter(
-    ({ vendor, namespace }) =>
-      vendor && namespace && (normalized === compact(vendor) || key.toLowerCase() === namespace)
-  )
-  if (vendors.length)
-    return {
-      ownerIds: vendors.map(({ app }) => app.id),
-      confidence: 'shared',
-      reason: `Vendor name or namespace inferred from installed bundle IDs (${key}); may serve multiple products. Counted once and protected.`,
-      protected: true
-    }
-  if (key.toLowerCase().startsWith('com.apple.'))
-    return {
-      ownerIds: [],
-      confidence: 'uncertain',
-      reason:
-        'Apple system identifier without an identified installed owner; protected from removal.',
-      protected: true
-    }
-  return {
-    ownerIds: [],
-    confidence: 'unmatched',
-    reason:
-      'No installed owner or possible relation identified by installed bundle IDs or adaptive product-name rules.',
-    protected: false
-  }
+  candidates: OwnershipCandidate[] = []
+) {
+  return createOwnershipMatcher(apps, candidates)(name, category)
 }

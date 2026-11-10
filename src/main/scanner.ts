@@ -344,7 +344,10 @@ export async function scan(
       skip(root.path, errorText(error))
     }
   }
-  const matchOwnership = createOwnershipMatcher(apps)
+  const matchOwnership = createOwnershipMatcher(
+    apps,
+    dataCandidates.map(({ path, category }) => ({ name: basename(path), category }))
+  )
   await mapLimited(dataCandidates, async ({ path, category }) => {
     try {
       const stat = await assertNoSymlink(path)
