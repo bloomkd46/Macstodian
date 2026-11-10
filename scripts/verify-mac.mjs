@@ -1,7 +1,7 @@
 // Launch the production renderer against real macOS data. Never call confirm().
 import { _electron as electron, expect } from '@playwright/test'
 import { createRequire } from 'node:module'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readlink, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 const require = createRequire(import.meta.url)
@@ -112,6 +112,21 @@ try {
   await search.fill('no-such-macstodian-app-093235')
   await expect(page.getByText('No applications match this search.')).toBeVisible()
   await search.fill('')
+  let skywardRecognized = false
+  if (
+    (await readlink('/Applications/Skyward.app/WrappedBundle').catch(() => null)) ===
+    'Wrapper/Mobile.iOS.app'
+  ) {
+    await search.fill('Skyward')
+    const row = page.locator('.apps-table tbody > tr').filter({
+      has: page.getByRole('button', { name: 'Details for Skyward', exact: true })
+    })
+    await expect(row).toContainText('com.skyward.mobileaccess')
+    await expect(row).not.toContainText('Protected')
+    await page.screenshot({ path: join(output, 'skyward-identified.png') })
+    await search.fill('')
+    skywardRecognized = true
+  }
   let reviewed = false
   const reviews = page.getByRole('button', { name: 'Review removal', exact: true })
   const reviewCount = await reviews.count()
@@ -189,6 +204,7 @@ try {
     apps,
     leftovers: leftoverPaths,
     leftoverGroups,
+    skywardRecognized,
     appReviewDefaultsChecked: reviewed,
     skippedCount,
     packageInternalExclusions: 0,
@@ -205,6 +221,7 @@ try {
       'app size sorting in both directions',
       'expanded matched paths',
       'search / empty results',
+      'iOS-style Skyward wrapper identified when installed',
       'leftovers largest first',
       'leftover age sorting in both directions',
       'same-name leftovers grouped with inspectable paths',
