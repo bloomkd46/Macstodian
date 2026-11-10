@@ -704,6 +704,8 @@ footer span:last-child {
   background: var(--surface);
 }
 .leftover {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 146px;
   display: flex;
   gap: 15px;
   padding: 19px 17px;

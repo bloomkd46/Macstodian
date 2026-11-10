@@ -76,7 +76,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const items = ${JSON.stringify(items)}, apps = ${JSON.stringify(apps)};
 globalThis.__uiTest = { scans: 0, requests: [], confirmations: 0, reveals: [], orphan: true };
 let snapshot, plan;
-ipcMain.handle('storage:scan', () => { globalThis.__uiTest.scans++; snapshot = { id: 'scan-' + globalThis.__uiTest.scans, createdAt: Date.now(), durationMs: 1, apps, items: items.filter(i => i.id !== 'orphan' || globalThis.__uiTest.orphan), skipped: [], roots: ['/fixture'] }; return snapshot; });
+ipcMain.handle('storage:scan', () => { globalThis.__uiTest.scans++; snapshot = { id: 'scan-' + globalThis.__uiTest.scans, createdAt: Date.now(), durationMs: 1, apps, items: globalThis.__uiTest.stress ? [...Array.from({ length: 3000 }, (_, n) => ({ ...items[4], id: 'stress-' + n, name: 'stress-' + n, path: '/fixture/Library/Application Support/stress-' + n, bytes: 4000 - n })), { ...items[4], id: 'protected-stress', name: 'protected-stress', path: '/fixture/Library/Application Support/protected-stress', protected: true }, ...Array.from({ length: 2000 }, (_, n) => ({ ...items[5], id: 'related-' + n }))] : items.filter(i => i.id !== 'orphan' || globalThis.__uiTest.orphan), skipped: globalThis.__uiTest.stress ? Array.from({ length: 2000 }, (_, n) => ({ path: '/fixture/denied/' + n, reason: 'Fixture denial' })) : [], roots: ['/fixture'] }; return snapshot; });
 ipcMain.handle('storage:review', (_event, request) => { globalThis.__uiTest.requests.push(request); if (request.scanId !== snapshot.id) throw new Error('Stale selection.'); if (request.appId === 'running') throw new Error('Quit Running App before removing its bundle or data, then try again.'); const selected = request.itemIds.map(id => snapshot.items.find(i => i.id === id)); if (selected.some(i => !i)) throw new Error('Unknown ID'); plan = { id: 'plan-' + globalThis.__uiTest.requests.length, items: selected, appName: request.appId ? 'Alpha' : null, totalBytes: selected.reduce((n, i) => n + i.bytes, 0), expiresAt: Date.now() + 300000 }; return plan; });
 ipcMain.handle('storage:confirm', (_event, id) => { if (id !== plan.id) throw new Error('Invalid plan'); globalThis.__uiTest.confirmations++; if (!plan.appName) globalThis.__uiTest.orphan = false; return plan.items.map(i => ({ itemId: i.id, path: i.path, status: plan.appName ? i.category === 'bundle' ? 'failed' : 'skipped' : 'trashed', message: plan.appName ? 'Fixture bundle failure: data left untouched.' : 'Moved to Trash (fixture only).' })); });
 ipcMain.handle('storage:reveal', (_event, request) => { globalThis.__uiTest.reveals.push(request); });
@@ -118,6 +118,14 @@ try {
     }
     await page.screenshot({ path: join(output, `${theme}-${view}.png`) })
   }
+  const dragStrip = await page.locator('.window-drag-strip').evaluate((element) => ({
+    region: getComputedStyle(element).getPropertyValue('-webkit-app-region'),
+    top: element.getBoundingClientRect().top,
+    width: element.getBoundingClientRect().width,
+    height: element.getBoundingClientRect().height
+  }))
+  expect(dragStrip).toMatchObject({ region: 'drag', top: 0, height: 44 })
+  expect(dragStrip.width).toBe(await page.evaluate(() => window.innerWidth))
   await checkAppearance('dark', 'empty', [])
   await page.getByRole('button', { name: 'Scan this Mac', exact: true }).click()
   await expect(page.getByRole('region', { name: 'Scan summary' })).toBeVisible()
@@ -183,6 +191,64 @@ try {
   await expect(page.locator('article.leftover')).toHaveCount(0)
   expect(await electronApp.evaluate(() => globalThis.__uiTest.scans)).toBe(3)
   expect(await electronApp.evaluate(() => globalThis.__uiTest.confirmations)).toBe(2)
+  // A large fixture catches whole-list remounts and expensive selection renders.
+  await electronApp.evaluate(() => {
+    globalThis.__uiTest.stress = true
+  })
+  await page.getByRole('button', { name: 'Rescan', exact: true }).click()
+  await expect(page.locator('article.leftover')).toHaveCount(3001)
+  await expect(page.locator('.shared .path-item')).toHaveCount(0)
+  await expect(page.locator('.skipped-list')).toHaveCount(0)
+  const disabled = page.locator('input[type="checkbox"]:disabled')
+  await expect(disabled).toHaveCount(1)
+  for (const theme of ['light', 'dark']) {
+    await electronApp.evaluate(({ nativeTheme }, theme) => {
+      nativeTheme.themeSource = theme
+    }, theme)
+    const styles = await page.evaluate(() => {
+      const disabled = getComputedStyle(document.querySelector('input[type="checkbox"]:disabled'))
+      const enabled = getComputedStyle(document.querySelector('input[type="checkbox"]:enabled'))
+      return {
+        disabled: {
+          border: disabled.borderStyle,
+          fill: disabled.backgroundImage,
+          cursor: disabled.cursor
+        },
+        enabled: { border: enabled.borderStyle, fill: enabled.backgroundImage }
+      }
+    })
+    expect(styles.disabled.border).toBe('dashed')
+    expect(styles.disabled.fill).toContain('repeating-linear-gradient')
+    expect(styles.disabled.cursor).toBe('not-allowed')
+    expect(styles.enabled.border).toBe('solid')
+    expect(styles.enabled.fill).toBe('none')
+  }
+  const selectionPaintMs = await page.evaluate(async () => {
+    const inputs = [...document.querySelectorAll('article.leftover input:enabled')].slice(0, 6)
+    const unchangedRow = inputs[5].closest('article')
+    const times = []
+    for (const input of inputs) {
+      const start = performance.now()
+      input.click()
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      if (!input.checked || !input.isConnected) throw new Error('Selection remounted or failed')
+      times.push(performance.now() - start)
+    }
+    if (unchangedRow !== inputs[5].closest('article')) throw new Error('Unchanged row was replaced')
+    return times
+  })
+  expect(Math.max(...selectionPaintMs)).toBeLessThan(250)
+  await expect(page.locator('.selection-bar')).toContainText('6 selected')
+  // Search must preserve selections and closed sections must reveal their data on demand.
+  await page.getByRole('textbox', { name: 'Search leftovers' }).fill('stress-0')
+  await expect(page.locator('article.leftover')).toHaveCount(1)
+  await expect(page.getByRole('checkbox')).toBeChecked()
+  await page.getByRole('textbox', { name: 'Search leftovers' }).fill('')
+  await expect(page.locator('article.leftover')).toHaveCount(3001)
+  await page.locator('.skipped summary').click()
+  await expect(page.locator('.skipped-list > div')).toHaveCount(2000)
+  await page.locator('.skipped summary').click()
+  await expect(page.locator('.skipped-list')).toHaveCount(0)
   expect(errors).toEqual([])
   const report = {
     passed: [
@@ -200,8 +266,14 @@ try {
       'refresh clears removed leftover',
       'native light/dark appearance changes propagate live across both tabs and dialogs',
       'native dark controls and themed surfaces',
-      'theme changes preserve removal selections'
+      'theme changes preserve removal selections',
+      'full-width draggable top strip',
+      'disabled checkboxes have distinct patterns in light and dark mode',
+      '3000-row selections paint within 250ms and preserve row identity',
+      'closed related/skipped sections mount contents only when opened',
+      'search preserves selected leftovers'
     ],
+    selectionPaintMs,
     realUserDataTrashed: false,
     rendererErrors: errors
   }
