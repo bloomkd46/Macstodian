@@ -86,7 +86,10 @@ export class RemovalService {
     const stat = await assertNoSymlink(record.view.path)
     if ((!stat.isFile() && !stat.isDirectory()) || !sameIdentity(record.identity, identity(stat)))
       throw new Error(`Item identity changed. Rescan: ${record.view.path}`)
-    const fresh = await measure(record.view.path, record.view.category)
+    const fresh =
+      record.view.category === 'bundle'
+        ? { ...(await this.platform.measureBundle(record.view.path)), partial: false }
+        : await measure(record.view.path, record.view.category)
     if (fresh.partial || fresh.fingerprint !== record.fingerprint)
       throw new Error(`Item changed since scanning. Rescan: ${record.view.path}`)
     const finalStat = await assertNoSymlink(record.view.path)

@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { resolve, sep } from 'node:path'
 
@@ -8,7 +9,12 @@ export interface BundleInfo {
   name: string | null
   names?: string[]
 }
+export interface BundleMeasurement {
+  bytes: number
+  fingerprint: string
+}
 export interface Platform {
+  measureBundle(path: string): Promise<BundleMeasurement>
   readBundleInfo(path: string): Promise<BundleInfo>
   lastOpened(path: string): Promise<number | null>
   isRunning(path: string): Promise<boolean>
@@ -34,6 +40,31 @@ export type CommandRunner = (
 ) => Promise<{ stdout: string }>
 export function createMacPlatform(run: CommandRunner = exec): Platform {
   return {
+    async measureBundle(path) {
+      // Native package accounting only: no candidate discovery or helper indexing
+      // inside .app bundles. Both tools use physical traversal, never following links.
+      const [size, manifest] = await Promise.all([
+        run('/usr/bin/du', ['-s', '-A', '-B', '1', '-P', path], {
+          timeout: 120000,
+          maxBuffer: 1024 * 1024
+        }),
+        run(
+          '/usr/sbin/mtree',
+          ['-c', '-n', '-P', '-k', 'type,inode,mode,nlink,size,time,ctime,btime,link', '-p', path],
+          { timeout: 120000, maxBuffer: 64 * 1024 * 1024 }
+        )
+      ])
+      const bytes = Number(size.stdout.match(/^(\d+)\s/)?.[1])
+      if (!Number.isSafeInteger(bytes) || bytes < 0 || !manifest.stdout.trim())
+        throw new Error('Could not measure application package.')
+      return {
+        bytes,
+        fingerprint: createHash('sha256')
+          .update(manifest.stdout)
+          .update(String(bytes))
+          .digest('hex')
+      }
+    },
     async readBundleInfo(path) {
       try {
         const { stdout } = await run(

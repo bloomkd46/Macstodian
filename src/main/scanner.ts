@@ -12,7 +12,7 @@ import type {
   SkippedLocation
 } from '../shared/api'
 import { createOwnershipMatcher } from './ownership'
-import type { Platform } from './platform'
+import { macPlatform, type Platform } from './platform'
 import { vendorUninstaller } from './uninstallers'
 
 export interface ScanConfig {
@@ -53,7 +53,6 @@ export interface Measurement {
   partial: boolean
   skippedSymlinks: number
   fingerprint: string
-  embeddedBundlePaths: string[]
 }
 export const identity = (stat: Stats): Identity => ({
   dev: stat.dev,
@@ -90,7 +89,7 @@ export async function assertNoSymlink(path: string): Promise<Stats> {
 
 export async function measure(
   path: string,
-  category: Category,
+  category: Exclude<Category, 'bundle'>,
   skip: (path: string, reason: string) => void = () => {},
   tick: () => void = () => {}
 ): Promise<Measurement> {
@@ -100,11 +99,8 @@ export async function measure(
     partial = false,
     skippedSymlinks = 0
   const hash = createHash('sha256')
-  const embeddedBundlePaths: string[] = []
   const seen = new Set<string>()
-  const stack = [
-    { path, excludeDate: category === 'cache' || category === 'logs' || category === 'bundle' }
-  ]
+  const stack = [{ path, excludeDate: category === 'cache' || category === 'logs' }]
   await assertNoSymlink(path)
   while (stack.length) {
     const entry = stack.pop()!
@@ -138,14 +134,14 @@ export async function measure(
         tick()
       } else if (stat.isDirectory()) {
         await assertNoSymlink(entry.path)
-        // Reuse this traversal, never follow links or index framework identifiers as app owners.
-        if (
-          category === 'bundle' &&
-          entry.path !== path &&
-          /\.(app|appex|xpc)$/i.test(entry.path) &&
-          embeddedBundlePaths.length < 256
-        )
-          embeddedBundlePaths.push(entry.path)
+        if (/\.app$/i.test(entry.path)) {
+          // Packages embedded in Library data are opaque too. Include their native
+          // aggregate and change fingerprint, without exposing their internal links.
+          const bundle = await macPlatform.measureBundle(entry.path)
+          bytes += bundle.bytes
+          hash.update(bundle.fingerprint)
+          continue
+        }
         const entries = (await readdir(entry.path)).sort().reverse()
         const after = await lstat(entry.path)
         if (
@@ -176,7 +172,6 @@ export async function measure(
     latestObservedChange,
     partial,
     skippedSymlinks,
-    embeddedBundlePaths,
     fingerprint: hash.digest('hex')
   }
 }
@@ -262,17 +257,15 @@ export async function scan(
           join(path, 'Contents/Info.plist'),
           'Bundle identity unreadable or missing; app protected and ownership unavailable.'
         )
-      const measurement = await measure(path, 'bundle', skip, () => {
-        files++
-        report('measuring', path)
-      })
-      const helperBundleIds = new Set<string>()
-      if (info.bundleId)
-        await mapLimited(measurement.embeddedBundlePaths, async (helper) => {
-          const metadata = await platform.readBundleInfo(helper)
-          if (metadata.bundleId && metadata.bundleId !== info.bundleId)
-            helperBundleIds.add(metadata.bundleId)
-        })
+      report('measuring', path)
+      let measurement: { bytes: number; fingerprint: string; partial: boolean }
+      try {
+        measurement = { ...(await platform.measureBundle(path)), partial: false }
+      } catch (error) {
+        // Keep the app visible, but fail closed if either native package pass fails.
+        measurement = { bytes: 0, fingerprint: '', partial: true }
+        skip(path, `Application package measurement incomplete: ${errorText(error)}`)
+      }
       if (!sameIdentity(identity(stat), identity(await assertNoSymlink(path))))
         throw new Error('Bundle changed during scan; rescan required.')
       const appId = randomUUID(),
@@ -285,10 +278,11 @@ export async function scan(
         bytes: measurement.bytes,
         latestChange: null,
         partial: measurement.partial || !info.bundleId,
-        skippedSymlinks: measurement.skippedSymlinks,
+        skippedSymlinks: 0,
         confidence: 'exact',
         ownerIds: [appId],
-        reason: 'Installed application bundle; measured separately from its data.',
+        reason:
+          'Installed application package; native aggregate size includes directory and symlink metadata. Contents are not indexed as scan candidates.',
         protected: protectedApp
       }
       records.set(item.id, {
@@ -313,7 +307,7 @@ export async function scan(
             )
           )
         ],
-        helperBundleIds: [...helperBundleIds].sort(),
+        helperBundleIds: [],
         appBytes: item.bytes,
         dataBytes: 0,
         totalBytes: item.bytes,
@@ -324,24 +318,6 @@ export async function scan(
         uninstaller: vendorUninstaller(info.bundleId)
       }
       apps.push(app)
-      // Only known, explicit uninstaller paths; never execute a discovered script.
-      if (!app.uninstaller) {
-        for (const suffix of [
-          'Contents/Helpers/Uninstaller.app',
-          'Contents/Resources/Uninstaller.app',
-          'Contents/Helpers/Uninstall.app'
-        ]) {
-          try {
-            const helper = join(path, suffix)
-            if ((await lstat(helper)).isDirectory()) {
-              app.uninstaller = `This app includes a vendor uninstaller at ${helper}. Use it for a complete removal.`
-              break
-            }
-          } catch {
-            /* optional helper */
-          }
-        }
-      }
       completed++
       report('measuring', path, true)
     } catch (error) {

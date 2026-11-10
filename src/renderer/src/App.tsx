@@ -476,7 +476,7 @@ export function App() {
                       <SortHeader
                         label="App size"
                         field="appBytes"
-                        title="Measured bundle files only; excludes symlinks."
+                        title="Native aggregate apparent size of the application package, including directory and symlink metadata. Links are never followed."
                       />
                       <SortHeader
                         label="Data size"
