@@ -85,6 +85,9 @@ try {
     expect(packageInternalExclusions).toEqual([])
     await page.locator('.skipped summary').click()
   }
+  await page.getByRole('button', { name: /^Apps/ }).click()
+  await expect(page.getByRole('heading', { name: /^Applications/ })).toBeVisible()
+  await expect(page.locator('tbody > tr').first()).toBeVisible()
   const apps = await page.locator('tbody > tr').count()
   expect(apps).toBeGreaterThan(0)
   await page.screenshot({ path: join(output, 'apps.png') })
@@ -127,8 +130,21 @@ try {
   }
   await page.getByRole('button', { name: /^Leftovers/ }).click()
   await expect(page.getByRole('heading', { name: /^Possible leftovers/ })).toBeVisible()
-  const leftovers = await page.locator('article.leftover').count()
+  const leftoverGroups = await page.locator('article.leftover').count()
+  const leftoverPaths = Number(
+    (await page.locator('.stats > div').nth(3).locator('small').textContent())
+      ?.match(/^[\d,]+/)?.[0]
+      .replaceAll(',', '')
+  )
+  expect(leftoverGroups).toBeLessThanOrEqual(leftoverPaths)
   await page.screenshot({ path: join(output, 'leftovers.png') })
+  const grouped = page.locator('.grouped-leftover').first()
+  if (await grouped.count()) {
+    await grouped.getByRole('button', { name: /^Details for/ }).click()
+    expect(await grouped.locator('.group-path').count()).toBeGreaterThan(1)
+    await page.screenshot({ path: join(output, 'grouped-leftovers.png') })
+    await grouped.getByRole('button', { name: /^Details for/ }).click()
+  }
   const sizes = await page.locator('.leftover-title > strong').allTextContents()
   const factor = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3, TB: 1024 ** 4 }
   const bytes = sizes.map((value) => {
@@ -136,9 +152,11 @@ try {
     return Number(number) * factor[unit]
   })
   expect(bytes.every((value, index) => index === 0 || bytes[index - 1] >= value)).toBe(true)
-  if (leftovers) {
+  if (leftoverGroups) {
     const first = page.locator('article.leftover').first()
-    await expect(first.getByRole('button', { name: 'Show in Finder ↗' })).toBeVisible()
+    const details = first.getByRole('button', { name: /^Details for/ })
+    if (await details.count()) await details.click()
+    await expect(first.getByRole('button', { name: 'Show in Finder ↗' }).first()).toBeVisible()
     const select = page.getByRole('checkbox')
     for (const checkbox of await select.all()) {
       if (await checkbox.isEnabled()) {
@@ -162,7 +180,8 @@ try {
     platform: process.platform,
     electron: await app.evaluate(() => process.versions.electron),
     apps,
-    leftovers,
+    leftovers: leftoverPaths,
+    leftoverGroups,
     appReviewDefaultsChecked: reviewed,
     skippedCount,
     packageInternalExclusions: 0,
@@ -180,6 +199,7 @@ try {
       'expanded matched paths',
       'search / empty results',
       'leftovers largest first',
+      'same-name leftovers grouped with inspectable paths',
       'leftovers review / explicit confirmation screen',
       'no Trash confirmation invoked'
     ]

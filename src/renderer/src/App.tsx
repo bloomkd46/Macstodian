@@ -55,6 +55,28 @@ const errorMessage = (error: unknown) =>
     : String(error)
 const removable = (item: ScanItem) =>
   !item.protected && !item.partial && !['shared', 'related'].includes(item.confidence)
+type LeftoverGroup = {
+  key: string
+  name: string
+  items: ScanItem[]
+  bytes: number
+  selectableIds: string[]
+}
+const groupLeftovers = (entries: ScanItem[]): LeftoverGroup[] => {
+  const groups = new Map<string, LeftoverGroup>()
+  for (const item of entries) {
+    const key = item.name.toLowerCase()
+    let group = groups.get(key)
+    if (!group) {
+      group = { key, name: item.name, items: [], bytes: 0, selectableIds: [] }
+      groups.set(key, group)
+    }
+    group.items.push(item)
+    group.bytes += item.bytes
+    if (removable(item)) group.selectableIds.push(item.id)
+  }
+  return [...groups.values()].sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name))
+}
 
 export function App() {
   const [tab, setTab] = useState<'apps' | 'leftovers'>('apps')
@@ -133,19 +155,35 @@ export function App() {
         }),
     [snapshot, query, sort, relatedBytes]
   )
-  const visibleLeftovers = useMemo(
-    () =>
-      leftovers.filter(
-        (item) =>
-          (!selectableOnly || removable(item)) &&
-          `${item.name} ${item.path}`.toLowerCase().includes(query.toLowerCase())
-      ),
-    [leftovers, query, selectableOnly]
+  const leftoverGroups = useMemo(() => groupLeftovers(leftovers), [leftovers])
+  const displayGroups = useMemo(
+    () => (selectableOnly ? groupLeftovers(leftovers.filter(removable)) : leftoverGroups),
+    [leftovers, leftoverGroups, selectableOnly]
   )
+  const visibleGroups = useMemo(() => {
+    const search = query.toLowerCase()
+    return displayGroups.filter(
+      (group) =>
+        group.name.toLowerCase().includes(search) ||
+        group.items.some((item) => item.path.toLowerCase().includes(search))
+    )
+  }, [displayGroups, query])
+  const visibleLeftoverPaths = visibleGroups.reduce((total, group) => total + group.items.length, 0)
   const toggleSelected = useCallback(
     (id: string) => setSelected((values) => toggle(values, id)),
     []
   )
+  const toggleGroupSelected = useCallback((ids: string[]) => {
+    setSelected((values) => {
+      const next = new Set(values)
+      const allSelected = ids.every((id) => next.has(id))
+      for (const id of ids) {
+        if (allSelected) next.delete(id)
+        else next.add(id)
+      }
+      return next
+    })
+  }, [])
   const toggleExpanded = useCallback(
     (id: string) => setExpanded((values) => toggle(values, id)),
     []
@@ -282,7 +320,7 @@ export function App() {
             }}
           >
             <FolderSearch size={18} />
-            Leftovers<span>{snapshot ? leftovers.length : '—'}</span>
+            Leftovers<span>{snapshot ? leftoverGroups.length : '—'}</span>
           </button>
         </nav>
         <div className="sidebar-bottom">
@@ -436,12 +474,13 @@ export function App() {
               <div>
                 <h2>
                   {tab === 'apps' ? 'Applications' : 'Possible leftovers'}{' '}
-                  <span>{tab === 'apps' ? visibleApps.length : visibleLeftovers.length}</span>
+                  <span>{tab === 'apps' ? visibleApps.length : visibleGroups.length}</span>
                 </h2>
                 {tab === 'leftovers' && (
                   <p>
-                    The scanner could not identify an installed owner. These files may still be
-                    useful.
+                    {visibleLeftoverPaths.toLocaleString()}{' '}
+                    {visibleLeftoverPaths === 1 ? 'path' : 'paths'} grouped by name. The scanner
+                    could not identify an installed owner; these files may still be useful.
                   </p>
                 )}
               </div>
@@ -543,17 +582,30 @@ export function App() {
                   </span>
                 </div>
                 <div className="leftover-list">
-                  {visibleLeftovers.map((item) => (
-                    <LeftoverRow
-                      key={item.id}
-                      item={item}
-                      checked={selected.has(item.id)}
-                      busy={!!busy}
-                      onToggle={toggleSelected}
-                      onReveal={reveal}
-                    />
-                  ))}
-                  {!visibleLeftovers.length && (
+                  {visibleGroups.map((group) =>
+                    group.items.length === 1 ? (
+                      <LeftoverRow
+                        key={group.key}
+                        item={group.items[0]!}
+                        checked={selected.has(group.items[0]!.id)}
+                        busy={!!busy}
+                        onToggle={toggleSelected}
+                        onReveal={reveal}
+                      />
+                    ) : (
+                      <LeftoverGroupRow
+                        key={group.key}
+                        group={group}
+                        selectedCount={group.selectableIds.filter((id) => selected.has(id)).length}
+                        busy={!!busy}
+                        onToggle={toggleSelected}
+                        onToggleGroup={toggleGroupSelected}
+                        onReveal={reveal}
+                        selected={selected}
+                      />
+                    )
+                  )}
+                  {!visibleGroups.length && (
                     <p className="no-results">
                       {selectableOnly
                         ? 'No selectable leftovers match this view.'
@@ -1008,6 +1060,115 @@ const LeftoverRow = memo(function LeftoverRow({
       <button className="text-button" disabled={!!busy} onClick={() => onReveal(item)}>
         Show in Finder ↗
       </button>
+    </article>
+  )
+})
+const LeftoverGroupRow = memo(function LeftoverGroupRow({
+  group,
+  selectedCount,
+  selected,
+  busy,
+  onToggle,
+  onToggleGroup,
+  onReveal
+}: {
+  group: LeftoverGroup
+  selectedCount: number
+  selected: Set<string>
+  busy: boolean
+  onToggle: (id: string) => void
+  onToggleGroup: (ids: string[]) => void
+  onReveal: (item: ScanItem) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const checkbox = useRef<HTMLInputElement>(null)
+  const protectedCount = group.items.length - group.selectableIds.length
+  useEffect(() => {
+    if (checkbox.current)
+      checkbox.current.indeterminate =
+        selectedCount > 0 && selectedCount < group.selectableIds.length
+  }, [selectedCount, group.selectableIds.length])
+  return (
+    <article className="leftover grouped-leftover">
+      <div className="group-header">
+        <label>
+          <input
+            ref={checkbox}
+            type="checkbox"
+            aria-label={`Select all selectable ${group.name} paths`}
+            title={
+              !group.selectableIds.length
+                ? 'Unavailable: all paths are protected or incompletely measured.'
+                : 'Select all selectable paths in this group'
+            }
+            disabled={!!busy || !group.selectableIds.length}
+            checked={group.selectableIds.length > 0 && selectedCount === group.selectableIds.length}
+            onChange={() => onToggleGroup(group.selectableIds)}
+          />
+        </label>
+        <div className="leftover-body">
+          <div className="leftover-title">
+            <h3>
+              <button
+                className="group-expand"
+                aria-expanded={open}
+                aria-label={`Details for ${group.name}`}
+                onClick={() => setOpen((value) => !value)}
+              >
+                {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                {group.name}
+              </button>
+            </h3>
+            <span className="badge">{group.items.length} paths</span>
+            {group.items.some((item) => item.confidence === 'uncertain') && (
+              <span className="badge amber">Uncertain owner</span>
+            )}
+            {protectedCount > 0 && <span className="badge">{protectedCount} protected</span>}
+            <strong>{formatBytes(group.bytes)}</strong>
+          </div>
+          <p className="group-categories">
+            {[...new Set(group.items.map((item) => categoryNames[item.category]))].join(' · ')}
+          </p>
+        </div>
+      </div>
+      {open && (
+        <div className="group-paths">
+          {group.items.map((item) => (
+            <div className="group-path" key={item.id}>
+              <label>
+                <input
+                  type="checkbox"
+                  aria-label={`Select ${item.path}`}
+                  title={
+                    !removable(item)
+                      ? 'Unavailable: this item is protected or incompletely measured.'
+                      : 'Select this path'
+                  }
+                  disabled={!!busy || !removable(item)}
+                  checked={selected.has(item.id)}
+                  onChange={() => onToggle(item.id)}
+                />
+              </label>
+              <div className="group-path-body">
+                <code>{item.path}</code>
+                <p>
+                  {categoryNames[item.category]} · Latest observed file change:{' '}
+                  {date(item.latestChange)}
+                  {!removable(item) ? ' · Protected' : ''}
+                </p>
+                <p>{item.reason}</p>
+              </div>
+              <strong>
+                {formatBytes(item.bytes)}
+                {item.partial ? ' · partial' : ''}
+              </strong>
+              <button className="text-button" disabled={!!busy} onClick={() => onReveal(item)}>
+                Show in Finder ↗
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </article>
   )
 })

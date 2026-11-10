@@ -29,6 +29,7 @@ const items = [
   item('data', 'support', '/fixture/Library/Application Support/dev.alpha', 50, ['alpha']),
   item('running-bundle', 'bundle', '/fixture/Applications/Running.app', 200, ['running']),
   item('orphan', 'support', '/fixture/Library/Application Support/orphan', 45),
+  item('orphan-preferences', 'preferences', '/fixture/Library/Preferences/orphan', 15),
   {
     ...item('related', 'support', '/fixture/Library/Application Support/Alpha', 90, ['alpha']),
     confidence: 'related',
@@ -76,7 +77,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const items = ${JSON.stringify(items)}, apps = ${JSON.stringify(apps)};
 globalThis.__uiTest = { scans: 0, requests: [], confirmations: 0, reveals: [], orphan: true };
 let snapshot, plan;
-ipcMain.handle('storage:scan', () => { globalThis.__uiTest.scans++; snapshot = { id: 'scan-' + globalThis.__uiTest.scans, createdAt: Date.now(), durationMs: 1, apps, items: globalThis.__uiTest.stress ? [...Array.from({ length: 3000 }, (_, n) => ({ ...items[4], id: 'stress-' + n, name: 'stress-' + n, path: '/fixture/Library/Application Support/stress-' + n, bytes: 4000 - n })), { ...items[4], id: 'protected-stress', name: 'protected-stress', path: '/fixture/Library/Application Support/protected-stress', protected: true }, ...Array.from({ length: 2000 }, (_, n) => ({ ...items[5], id: 'related-' + n }))] : items.filter(i => i.id !== 'orphan' || globalThis.__uiTest.orphan), skipped: globalThis.__uiTest.stress ? Array.from({ length: 2000 }, (_, n) => ({ path: '/fixture/denied/' + n, reason: 'Fixture denial' })) : [], roots: ['/fixture'] }; return snapshot; });
+ipcMain.handle('storage:scan', () => { globalThis.__uiTest.scans++; snapshot = { id: 'scan-' + globalThis.__uiTest.scans, createdAt: Date.now(), durationMs: 1, apps, items: globalThis.__uiTest.stress ? [...Array.from({ length: 3000 }, (_, n) => ({ ...items[4], id: 'stress-' + n, name: 'stress-' + n, path: '/fixture/Library/Application Support/stress-' + n, bytes: 4000 - n })), { ...items[4], id: 'protected-stress', name: 'protected-stress', path: '/fixture/Library/Application Support/protected-stress', protected: true }, ...Array.from({ length: 2000 }, (_, n) => ({ ...items[6], id: 'related-' + n }))] : items.filter(i => !i.id.startsWith('orphan') || globalThis.__uiTest.orphan), skipped: globalThis.__uiTest.stress ? Array.from({ length: 2000 }, (_, n) => ({ path: '/fixture/denied/' + n, reason: 'Fixture denial' })) : [], roots: ['/fixture'] }; return snapshot; });
 ipcMain.handle('storage:review', (_event, request) => { globalThis.__uiTest.requests.push(request); if (request.scanId !== snapshot.id) throw new Error('Stale selection.'); if (request.appId === 'running') throw new Error('Quit Running App before removing its bundle or data, then try again.'); const selected = request.itemIds.map(id => snapshot.items.find(i => i.id === id)); if (selected.some(i => !i)) throw new Error('Unknown ID'); plan = { id: 'plan-' + globalThis.__uiTest.requests.length, items: selected, appName: request.appId ? 'Alpha' : null, totalBytes: selected.reduce((n, i) => n + i.bytes, 0), expiresAt: Date.now() + 300000 }; return plan; });
 ipcMain.handle('storage:confirm', (_event, id) => { if (id !== plan.id) throw new Error('Invalid plan'); globalThis.__uiTest.confirmations++; if (!plan.appName) globalThis.__uiTest.orphan = false; return plan.items.map(i => ({ itemId: i.id, path: i.path, status: plan.appName ? i.category === 'bundle' ? 'failed' : 'skipped' : 'trashed', message: plan.appName ? 'Fixture bundle failure: data left untouched.' : 'Moved to Trash (fixture only).' })); });
 ipcMain.handle('storage:reveal', (_event, request) => { globalThis.__uiTest.reveals.push(request); });
@@ -132,7 +133,7 @@ try {
   await expect(page.locator('.stats > div').nth(1).locator('strong')).toHaveText('75 B')
   await expect(page.locator('.stats > div').nth(2).locator('strong')).toHaveText('170 B')
   await expect(page.locator('.stats > div')).toHaveCount(4)
-  await expect(page.locator('.stats > div').nth(3).locator('strong')).toHaveText('45 B')
+  await expect(page.locator('.stats > div').nth(3).locator('strong')).toHaveText('60 B')
   const alphaRow = page.locator('.apps-table tbody > tr').first()
   await expect(alphaRow.locator('td').nth(2)).toContainText('165 B')
   await expect(alphaRow.locator('td').nth(2)).toContainText('1 possible related path · 90 B')
@@ -184,12 +185,31 @@ try {
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   await page.getByRole('button', { name: /^Leftovers/ }).click()
   await expect(page.locator('article.leftover')).toHaveCount(1)
+  await expect(page.locator('.leftover-title > strong')).toHaveText('60 B')
+  await expect(page.locator('.leftover-title')).toContainText('2 paths')
   await checkAppearance('dark', 'leftovers', ['.leftover-list'])
   await checkAppearance('light', 'leftovers', ['.leftover-list'])
   await checkAppearance('dark', 'leftovers', ['.leftover-list'])
-  await page.getByRole('checkbox').check()
+  await page.getByRole('button', { name: 'Details for orphan' }).click()
+  await expect(page.locator('.group-path')).toHaveCount(2)
+  await expect(page.locator('.group-path')).toContainText([
+    '/fixture/Library/Application Support/orphan',
+    '/fixture/Library/Preferences/orphan'
+  ])
+  await page.getByRole('textbox', { name: 'Search leftovers' }).fill('Preferences/orphan')
+  await expect(page.locator('article.leftover')).toHaveCount(1)
+  await expect(page.locator('.leftover-title > strong')).toHaveText('60 B')
+  await expect(page.locator('.group-path')).toHaveCount(2)
+  await page.getByRole('textbox', { name: 'Search leftovers' }).fill('')
+  await page.getByRole('checkbox', { name: 'Select /fixture/Library/Preferences/orphan' }).check()
+  await expect(
+    page.getByRole('checkbox', { name: 'Select all selectable orphan paths' })
+  ).toHaveJSProperty('indeterminate', true)
+  await page.getByRole('checkbox', { name: 'Select all selectable orphan paths' }).check()
+  await expect(page.locator('.selection-bar')).toContainText('2 selected · 60 B')
   await page.getByRole('button', { name: 'Review selected items' }).click()
   await expect(page.getByRole('heading', { name: 'Confirm move to Trash' })).toBeVisible()
+  await expect(dialog.locator('.path-item')).toHaveCount(2)
   await page.screenshot({ path: join(output, 'fixture-confirmation.png') })
   await dialog.getByRole('button', { name: 'Confirm move to Trash' }).click()
   await expect(page.getByRole('region', { name: 'Removal outcomes' })).toContainText(
@@ -289,6 +309,7 @@ try {
       'automatic rescan after confirmation',
       'running-app rejection displayed',
       'leftover explicit selection / confirmation',
+      'same-name leftovers grouped with combined size and individual path controls',
       'successful fixture removal outcome displayed',
       'refresh clears removed leftover',
       'native light/dark appearance changes propagate live across both tabs and dialogs',
