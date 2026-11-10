@@ -1,0 +1,35 @@
+name: Pre-check pull request
+
+on:
+  pull_request:
+    branches: [main, beta]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  pre-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Check branch, version, and changelog
+        env:
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/pre-check.mjs
+      - name: Install dependencies
+        run: corepack yarn install --immutable
+      - name: Test and build
+        run: |
+          corepack yarn test:release
+          corepack yarn test
+          corepack yarn build

@@ -43,7 +43,15 @@ corepack yarn dist          # local unsigned DMG under release/
 
 `verify:mac` requires a logged-in macOS desktop session. It checks both tabs, progress, sorting, search, expanded paths, review defaults, and the leftover confirmation screen. It never confirms removal, and a development guard disables Trash. Screenshots and reports go to `verification/` (gitignored). Fixture UI tests separately exercise confirmation, failures, per-item outcomes, running-app rejection, and automatic refresh.
 
-Local packaging is unsigned. Distribution requires your own signing identity, notarization, and release process.
+## Release unsigned builds
+
+The [release workflow](.github/workflows/release.yml) runs on pushes to `main` and `beta`. It tests and builds on native Apple Silicon and Intel GitHub runners, creates separate unsigned DMGs and SHA-256 checksums, and publishes a GitHub release only after both builds succeed. The workflow creates the `v`-prefixed tag automatically at the pushed commit. A public release with the same version is skipped; a draft can be retried. Release notes are generated from GitHub history. The workflow uses the repository's `GITHUB_TOKEN`; no Apple Developer account or signing secrets are required.
+
+The [pull request pre-check](.github/workflows/pre-check.yml) requires an increased release version and a `CHANGELOG.md` update. Only this repository's `beta` branch can merge into `main`. For same-repository pull requests, it posts or updates a check comment and, when checks pass, sets the PR title to the package version and its body to the new changelog text. Keep `package.json` on `beta` at an `X.Y.Z-beta.N` version; the release workflow strips the beta suffix when the change lands on `main`. That conversion happens only in CI, so the package file in Git retains its beta version. To make a beta release, update the version and changelog in a pull request to `beta`, merge it, and let the push workflow run. To make a stable release, merge `beta` into `main`; the workflow publishes the corresponding `X.Y.Z` version. The first push to `main` can publish the current `1.0.0` version.
+
+Check the Actions run and the resulting [GitHub Releases page](https://github.com/bloomkd46/Macstodian/releases). Local commits that have not been pushed are absent from the release. A push that keeps the same package version does not replace an already public release.
+
+These DMGs are **unsigned and not notarized**. macOS may block the app on first launch. Only after verifying that the download came from this repository, a user can try opening the app, then use **System Settings → Privacy & Security → Open Anyway** if macOS offers that choice. See [Apple's guidance](https://support.apple.com/en-us/102445). To check a DMG against its release checksum, run `shasum -a 256 -c SHA256SUMS-arm64.txt` or `shasum -a 256 -c SHA256SUMS-x64.txt` from the directory containing the downloaded files.
 
 ## Scope and limitations
 
