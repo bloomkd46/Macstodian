@@ -131,6 +131,8 @@ try {
   await expect(page.getByRole('region', { name: 'Scan summary' })).toBeVisible()
   await expect(page.locator('.stats > div').nth(1).locator('strong')).toHaveText('75 B')
   await expect(page.locator('.stats > div').nth(2).locator('strong')).toHaveText('170 B')
+  await expect(page.locator('.stats > div')).toHaveCount(4)
+  await expect(page.locator('.stats > div').nth(3).locator('strong')).toHaveText('45 B')
   await checkAppearance('dark', 'apps', ['.stats', '.table-wrap'])
   await checkAppearance('light', 'apps', ['.stats', '.table-wrap'])
   await checkAppearance('dark', 'apps', ['.stats', '.table-wrap'])
@@ -191,12 +193,15 @@ try {
   await expect(page.locator('article.leftover')).toHaveCount(0)
   expect(await electronApp.evaluate(() => globalThis.__uiTest.scans)).toBe(3)
   expect(await electronApp.evaluate(() => globalThis.__uiTest.confirmations)).toBe(2)
+  await expect(page.locator('.stats > div').nth(3).locator('strong')).toHaveText('0 B')
   // A large fixture catches whole-list remounts and expensive selection renders.
   await electronApp.evaluate(() => {
     globalThis.__uiTest.stress = true
   })
   await page.getByRole('button', { name: 'Rescan', exact: true }).click()
   await expect(page.locator('article.leftover')).toHaveCount(3001)
+  const leftoverTotal = await page.locator('.stats > div').nth(3).locator('strong').textContent()
+  await expect(page.locator('.stats > div').nth(3).locator('small')).toContainText('3,001 paths')
   await expect(page.locator('.shared .path-item')).toHaveCount(0)
   await expect(page.locator('.skipped-list')).toHaveCount(0)
   const disabled = page.locator('input[type="checkbox"]:disabled')
@@ -228,6 +233,8 @@ try {
     const unchangedRow = inputs[5].closest('article')
     const times = []
     for (const input of inputs) {
+      input.scrollIntoView({ block: 'center' })
+      await new Promise((resolve) => requestAnimationFrame(resolve))
       const start = performance.now()
       input.click()
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
@@ -242,6 +249,7 @@ try {
   // Search must preserve selections and closed sections must reveal their data on demand.
   await page.getByRole('textbox', { name: 'Search leftovers' }).fill('stress-0')
   await expect(page.locator('article.leftover')).toHaveCount(1)
+  await expect(page.locator('.stats > div').nth(3).locator('strong')).toHaveText(leftoverTotal)
   await expect(page.getByRole('checkbox')).toBeChecked()
   await page.getByRole('textbox', { name: 'Search leftovers' }).fill('')
   await expect(page.locator('article.leftover')).toHaveCount(3001)
@@ -271,7 +279,8 @@ try {
       'disabled checkboxes have distinct patterns in light and dark mode',
       '3000-row selections paint within 250ms and preserve row identity',
       'closed related/skipped sections mount contents only when opened',
-      'search preserves selected leftovers'
+      'search preserves selected leftovers',
+      'leftover summary includes protected data, ignores search and selection, and refreshes after removal'
     ],
     selectionPaintMs,
     realUserDataTrashed: false,

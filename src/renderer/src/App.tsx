@@ -88,6 +88,15 @@ export function App() {
     leftovers.sort((a, b) => b.bytes - a.bytes || a.path.localeCompare(b.path))
     return { shared, related, leftovers }
   }, [snapshot])
+  const totals = useMemo(
+    () => ({
+      bundles: snapshot?.apps.reduce((total, app) => total + app.appBytes, 0) ?? 0,
+      data: snapshot?.apps.reduce((total, app) => total + app.dataBytes, 0) ?? 0,
+      related: sum(shared) + sum(related),
+      leftovers: sum(leftovers)
+    }),
+    [snapshot, shared, related, leftovers]
+  )
   const visibleApps = useMemo(
     () =>
       (snapshot?.apps ?? [])
@@ -363,23 +372,26 @@ export function App() {
             <section className="stats" aria-label="Scan summary">
               <div>
                 <span>APPLICATION BUNDLES</span>
-                <strong>
-                  {formatBytes(snapshot.apps.reduce((total, app) => total + app.appBytes, 0))}
-                </strong>
+                <strong>{formatBytes(totals.bundles)}</strong>
                 <small>{snapshot.apps.length} discovered · includes protected system apps</small>
               </div>
               <div>
                 <span>MATCHED APP DATA</span>
-                <strong>
-                  {formatBytes(snapshot.apps.reduce((total, app) => total + app.dataBytes, 0))}
-                </strong>
+                <strong>{formatBytes(totals.data)}</strong>
                 <small>Outside bundles · shared and possible related data excluded</small>
               </div>
               <div>
                 <span>SHARED & POSSIBLE RELATED DATA</span>
-                <strong>{formatBytes(sum([...shared, ...related]))}</strong>
+                <strong>{formatBytes(totals.related)}</strong>
                 <small>
                   {shared.length} shared · {related.length} possible related · protected
+                </small>
+              </div>
+              <div>
+                <span>POSSIBLE LEFTOVERS</span>
+                <strong>{formatBytes(totals.leftovers)}</strong>
+                <small>
+                  {leftovers.length.toLocaleString()} paths · includes protected and uncertain data
                 </small>
               </div>
             </section>

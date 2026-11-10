@@ -2,6 +2,8 @@
 
 A local-only macOS storage inspector built with Electron, React, and TypeScript. Apps and Possible leftovers share one asynchronous, read-only scanner. Removal always requires selection, review, and explicit confirmation.
 
+The summary shows application bundles, matched data, shared/possible related data, and all possible leftover bytes (including protected and uncertain paths). Search and selection do not change these scan-wide totals.
+
 Appearance follows macOS automatically, including changes between Light and Dark Mode while the app is open.
 
 ## Install and run
