@@ -152,6 +152,13 @@ try {
     return Number(number) * factor[unit]
   })
   expect(bytes.every((value, index) => index === 0 || bytes[index - 1] >= value)).toBe(true)
+  const leftoverSort = page.getByRole('combobox', { name: 'Sort leftovers' })
+  await expect(leftoverSort).toHaveValue('size-desc')
+  await leftoverSort.selectOption('age-asc')
+  await expect(leftoverSort).toHaveValue('age-asc')
+  await leftoverSort.selectOption('age-desc')
+  await expect(leftoverSort).toHaveValue('age-desc')
+  await leftoverSort.selectOption('size-desc')
   if (leftoverGroups) {
     const first = page.locator('article.leftover').first()
     const details = first.getByRole('button', { name: /^Details for/ })
@@ -199,6 +206,7 @@ try {
       'expanded matched paths',
       'search / empty results',
       'leftovers largest first',
+      'leftover age sorting in both directions',
       'same-name leftovers grouped with inspectable paths',
       'leftovers review / explicit confirmation screen',
       'no Trash confirmation invoked'

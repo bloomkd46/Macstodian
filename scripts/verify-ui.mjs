@@ -29,7 +29,10 @@ const items = [
   item('data', 'support', '/fixture/Library/Application Support/dev.alpha', 50, ['alpha']),
   item('running-bundle', 'bundle', '/fixture/Applications/Running.app', 200, ['running']),
   item('orphan', 'support', '/fixture/Library/Application Support/orphan', 45),
-  item('orphan-preferences', 'preferences', '/fixture/Library/Preferences/orphan', 15),
+  {
+    ...item('orphan-preferences', 'preferences', '/fixture/Library/Preferences/orphan', 15),
+    latestChange: Date.UTC(2025, 0, 4, 12)
+  },
   {
     ...item('related', 'support', '/fixture/Library/Application Support/Alpha', 90, ['alpha']),
     confidence: 'related',
@@ -77,7 +80,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const items = ${JSON.stringify(items)}, apps = ${JSON.stringify(apps)};
 globalThis.__uiTest = { scans: 0, requests: [], confirmations: 0, reveals: [], orphan: true };
 let snapshot, plan;
-ipcMain.handle('storage:scan', () => { globalThis.__uiTest.scans++; snapshot = { id: 'scan-' + globalThis.__uiTest.scans, createdAt: Date.now(), durationMs: 1, apps, items: globalThis.__uiTest.stress ? [...Array.from({ length: 3000 }, (_, n) => ({ ...items[4], id: 'stress-' + n, name: 'stress-' + n, path: '/fixture/Library/Application Support/stress-' + n, bytes: 4000 - n })), { ...items[4], id: 'protected-stress', name: 'protected-stress', path: '/fixture/Library/Application Support/protected-stress', protected: true }, ...Array.from({ length: 2000 }, (_, n) => ({ ...items[6], id: 'related-' + n }))] : items.filter(i => !i.id.startsWith('orphan') || globalThis.__uiTest.orphan), skipped: globalThis.__uiTest.stress ? Array.from({ length: 2000 }, (_, n) => ({ path: '/fixture/denied/' + n, reason: 'Fixture denial' })) : [], roots: ['/fixture'] }; return snapshot; });
+ipcMain.handle('storage:scan', () => { globalThis.__uiTest.scans++; snapshot = { id: 'scan-' + globalThis.__uiTest.scans, createdAt: Date.now(), durationMs: 1, apps, items: globalThis.__uiTest.stress ? [...Array.from({ length: 3000 }, (_, n) => ({ ...items[4], id: 'stress-' + n, name: 'stress-' + n, path: '/fixture/Library/Application Support/stress-' + n, bytes: 4000 - n, latestChange: Date.UTC(2025, 0, n + 2) })), { ...items[4], id: 'protected-stress', name: 'protected-stress', path: '/fixture/Library/Application Support/protected-stress', protected: true, latestChange: null }, ...Array.from({ length: 2000 }, (_, n) => ({ ...items[6], id: 'related-' + n }))] : items.filter(i => !i.id.startsWith('orphan') || globalThis.__uiTest.orphan), skipped: globalThis.__uiTest.stress ? Array.from({ length: 2000 }, (_, n) => ({ path: '/fixture/denied/' + n, reason: 'Fixture denial' })) : [], roots: ['/fixture'] }; return snapshot; });
 ipcMain.handle('storage:review', (_event, request) => { globalThis.__uiTest.requests.push(request); if (request.scanId !== snapshot.id) throw new Error('Stale selection.'); if (request.appId === 'running') throw new Error('Quit Running App before removing its bundle or data, then try again.'); const selected = request.itemIds.map(id => snapshot.items.find(i => i.id === id)); if (selected.some(i => !i)) throw new Error('Unknown ID'); plan = { id: 'plan-' + globalThis.__uiTest.requests.length, items: selected, appName: request.appId ? 'Alpha' : null, totalBytes: selected.reduce((n, i) => n + i.bytes, 0), expiresAt: Date.now() + 300000 }; return plan; });
 ipcMain.handle('storage:confirm', (_event, id) => { if (id !== plan.id) throw new Error('Invalid plan'); globalThis.__uiTest.confirmations++; if (!plan.appName) globalThis.__uiTest.orphan = false; return plan.items.map(i => ({ itemId: i.id, path: i.path, status: plan.appName ? i.category === 'bundle' ? 'failed' : 'skipped' : 'trashed', message: plan.appName ? 'Fixture bundle failure: data left untouched.' : 'Moved to Trash (fixture only).' })); });
 ipcMain.handle('storage:reveal', (_event, request) => { globalThis.__uiTest.reveals.push(request); });
@@ -187,6 +190,14 @@ try {
   await expect(page.locator('article.leftover')).toHaveCount(1)
   await expect(page.locator('.leftover-title > strong')).toHaveText('60 B')
   await expect(page.locator('.leftover-title')).toContainText('2 paths')
+  const newestGroupDate = await page.evaluate(() =>
+    new Date(Date.UTC(2025, 0, 4, 12)).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    })
+  )
+  await expect(page.locator('.group-categories')).toContainText(newestGroupDate)
   await checkAppearance('dark', 'leftovers', ['.leftover-list'])
   await checkAppearance('light', 'leftovers', ['.leftover-list'])
   await checkAppearance('dark', 'leftovers', ['.leftover-list'])
@@ -225,6 +236,18 @@ try {
   })
   await page.getByRole('button', { name: 'Rescan', exact: true }).click()
   await expect(page.locator('article.leftover')).toHaveCount(3001)
+  const sortLeftovers = page.getByRole('combobox', { name: 'Sort leftovers' })
+  await expect(sortLeftovers).toHaveValue('size-desc')
+  await sortLeftovers.selectOption('size-asc')
+  await expect(page.locator('article.leftover').first()).toContainText('protected-stress')
+  await sortLeftovers.selectOption('age-asc')
+  await expect(page.locator('article.leftover').first()).toContainText('stress-0')
+  await expect(page.locator('article.leftover').last()).toContainText('protected-stress')
+  await sortLeftovers.selectOption('age-desc')
+  await expect(page.locator('article.leftover').first()).toContainText('stress-2999')
+  await expect(page.locator('article.leftover').last()).toContainText('protected-stress')
+  await sortLeftovers.selectOption('size-desc')
+  await expect(page.locator('article.leftover').first()).toContainText('stress-0')
   const leftoverTotal = await page.locator('.stats > div').nth(3).locator('strong').textContent()
   await expect(page.locator('.stats > div').nth(3).locator('small')).toContainText('3,001 paths')
   await expect(page.locator('.shared .path-item')).toHaveCount(0)
@@ -310,6 +333,7 @@ try {
       'running-app rejection displayed',
       'leftover explicit selection / confirmation',
       'same-name leftovers grouped with combined size and individual path controls',
+      'leftovers sort by size and latest observed change with unknown ages last',
       'successful fixture removal outcome displayed',
       'refresh clears removed leftover',
       'native light/dark appearance changes propagate live across both tabs and dialogs',
