@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AppWindow,
   ArrowDown,
@@ -76,38 +76,52 @@ export function App() {
   const [plan, setPlan] = useState<RemovalPlan | null>(null)
   const [results, setResults] = useState<RemovalResult[] | null>(null)
   const items = useMemo(() => new Map(snapshot?.items.map((item) => [item.id, item])), [snapshot])
-  const shared = snapshot?.items.filter((item) => item.confidence === 'shared') ?? []
-  const related = snapshot?.items.filter((item) => item.confidence === 'related') ?? []
-  const leftovers = (
-    snapshot?.items.filter(
-      (item) => item.category !== 'bundle' && !item.ownerIds.length && item.confidence !== 'shared'
-    ) ?? []
-  ).sort((a, b) => b.bytes - a.bytes || a.path.localeCompare(b.path))
-  const search = query.toLowerCase()
-  const visibleApps = (snapshot?.apps ?? [])
-    .filter((app) => `${app.name} ${app.bundleId} ${app.path}`.toLowerCase().includes(search))
-    .sort((a, b) => {
-      const av = a[sort.key],
-        bv = b[sort.key]
-      // Unknown dates remain last in either direction.
-      if (av === null) return bv === null ? a.name.localeCompare(b.name) : 1
-      if (bv === null) return -1
-      return (
-        (typeof av === 'string' && typeof bv === 'string'
-          ? av.localeCompare(bv)
-          : Number(av) - Number(bv)) * (sort.ascending ? 1 : -1) || a.name.localeCompare(b.name)
-      )
-    })
-  const visibleLeftovers = leftovers.filter((item) =>
-    `${item.name} ${item.path}`.toLowerCase().includes(search)
+  const { shared, related, leftovers } = useMemo(() => {
+    const shared: ScanItem[] = [],
+      related: ScanItem[] = [],
+      leftovers: ScanItem[] = []
+    for (const item of snapshot?.items ?? []) {
+      if (item.confidence === 'shared') shared.push(item)
+      else if (item.confidence === 'related') related.push(item)
+      else if (item.category !== 'bundle' && !item.ownerIds.length) leftovers.push(item)
+    }
+    leftovers.sort((a, b) => b.bytes - a.bytes || a.path.localeCompare(b.path))
+    return { shared, related, leftovers }
+  }, [snapshot])
+  const visibleApps = useMemo(
+    () =>
+      (snapshot?.apps ?? [])
+        .filter((app) =>
+          `${app.name} ${app.bundleId} ${app.path}`.toLowerCase().includes(query.toLowerCase())
+        )
+        .sort((a, b) => {
+          const av = a[sort.key],
+            bv = b[sort.key]
+          if (av === null) return bv === null ? a.name.localeCompare(b.name) : 1
+          if (bv === null) return -1
+          return (
+            (typeof av === 'string' && typeof bv === 'string'
+              ? av.localeCompare(bv)
+              : Number(av) - Number(bv)) * (sort.ascending ? 1 : -1) || a.name.localeCompare(b.name)
+          )
+        }),
+    [snapshot, query, sort]
   )
-  const sum = (entries: ScanItem[]) => entries.reduce((total, item) => total + item.bytes, 0)
-  const toggle = (values: Set<string>, id: string) => {
-    const next = new Set(values)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    return next
-  }
+  const visibleLeftovers = useMemo(
+    () =>
+      leftovers.filter((item) =>
+        `${item.name} ${item.path}`.toLowerCase().includes(query.toLowerCase())
+      ),
+    [leftovers, query]
+  )
+  const toggleSelected = useCallback(
+    (id: string) => setSelected((values) => toggle(values, id)),
+    []
+  )
+  const toggleExpanded = useCallback(
+    (id: string) => setExpanded((values) => toggle(values, id)),
+    []
+  )
 
   async function scanMac() {
     if (operation.current) return
@@ -131,14 +145,17 @@ export function App() {
       setBusy(null)
     }
   }
-  async function reveal(item: ScanItem) {
-    if (!snapshot) return
-    try {
-      await window.macstodian.reveal({ scanId: snapshot.id, itemId: item.id })
-    } catch (error) {
-      setError(errorMessage(error))
-    }
-  }
+  const reveal = useCallback(
+    async (item: ScanItem) => {
+      if (!snapshot) return
+      try {
+        await window.macstodian.reveal({ scanId: snapshot.id, itemId: item.id })
+      } catch (error) {
+        setError(errorMessage(error))
+      }
+    },
+    [snapshot]
+  )
   async function makePlan(ids: Set<string>, app?: InstalledApp) {
     if (!snapshot || operation.current) return
     operation.current = true
@@ -178,59 +195,15 @@ export function App() {
       if (removalError) setError(removalError)
     }
   }
-  function openAppReview(app: InstalledApp) {
-    setError('')
-    setReviewApp(app)
-    const bundle = items.get(app.bundleItemId)
-    setAppSelection(new Set(bundle && removable(bundle) ? [bundle.id] : []))
-  }
-  function PathItem({ item }: { item: ScanItem }) {
-    return (
-      <div className="path-item">
-        <div className="path-top">
-          <span className="category">{categoryNames[item.category]}</span>
-          <strong>
-            {formatBytes(item.bytes)}
-            {item.partial ? ' · partial' : ''}
-          </strong>
-          <button className="text-button" disabled={!!busy} onClick={() => void reveal(item)}>
-            Show in Finder ↗
-          </button>
-        </div>
-        <code>{item.path}</code>
-        <p>
-          {item.reason}
-          {item.skippedSymlinks > 0 &&
-            ` ${item.skippedSymlinks} symlink(s) excluded from measurement.`}
-        </p>
-      </div>
-    )
-  }
-  function SortHeader({ label, field, title }: { label: string; field: SortKey; title?: string }) {
-    return (
-      <th aria-sort={sort.key === field ? (sort.ascending ? 'ascending' : 'descending') : 'none'}>
-        <button
-          title={title}
-          onClick={() =>
-            setSort({
-              key: field,
-              ascending: sort.key === field ? !sort.ascending : field === 'name'
-            })
-          }
-        >
-          {label}
-          {sort.key === field ? (
-            sort.ascending ? (
-              <ArrowUp size={12} />
-            ) : (
-              <ArrowDown size={12} />
-            )
-          ) : null}
-          {title && <Info size={12} />}
-        </button>
-      </th>
-    )
-  }
+  const openAppReview = useCallback(
+    (app: InstalledApp) => {
+      setError('')
+      setReviewApp(app)
+      const bundle = items.get(app.bundleItemId)
+      setAppSelection(new Set(bundle && removable(bundle) ? [bundle.id] : []))
+    },
+    [items]
+  )
   const reviewItems = reviewApp
     ? [reviewApp.bundleItemId, ...reviewApp.dataItemIds]
         .map((id) => items.get(id))
@@ -425,24 +398,7 @@ export function App() {
               </span>
             </div>
             {snapshot.skipped.length > 0 && (
-              <details className="skipped">
-                <summary>
-                  {snapshot.skipped.length.toLocaleString()} skipped locations or entries · inspect
-                  scan limitations
-                </summary>
-                <p>
-                  Denied access, missing locations, and symlinks are excluded. Sizes may be lower
-                  than actual usage. Incomplete items are protected from removal.
-                </p>
-                <div className="skipped-list">
-                  {snapshot.skipped.map((entry, index) => (
-                    <div key={index}>
-                      <code>{entry.path}</code>
-                      <small>{entry.reason}</small>
-                    </div>
-                  ))}
-                </div>
-              </details>
+              <SkippedLocations key={snapshot.id} skipped={snapshot.skipped} />
             )}
             <div className="table-toolbar">
               <div>
@@ -472,24 +428,37 @@ export function App() {
                 <table className="apps-table">
                   <thead>
                     <tr>
-                      <SortHeader label="Application" field="name" />
+                      <SortHeader sort={sort} setSort={setSort} label="Application" field="name" />
                       <SortHeader
+                        sort={sort}
+                        setSort={setSort}
                         label="App size"
                         field="appBytes"
                         title="Native aggregate apparent size of the application package, including directory and symlink metadata. Links are never followed."
                       />
                       <SortHeader
+                        sort={sort}
+                        setSort={setSort}
                         label="Data size"
                         field="dataBytes"
                         title="Confidently matched data outside the app bundle. Shared data is counted separately."
                       />
-                      <SortHeader label="Total size" field="totalBytes" />
                       <SortHeader
+                        sort={sort}
+                        setSort={setSort}
+                        label="Total size"
+                        field="totalBytes"
+                      />
+                      <SortHeader
+                        sort={sort}
+                        setSort={setSort}
                         label="Last opened"
                         field="lastOpened"
                         title="Spotlight kMDItemLastUsedDate. Unknown if missing or unreadable."
                       />
                       <SortHeader
+                        sort={sort}
+                        setSort={setSort}
                         label="Data last changed"
                         field="dataLastChanged"
                         title={changedHelp}
@@ -501,7 +470,16 @@ export function App() {
                   </thead>
                   <tbody>
                     {visibleApps.map((app) => (
-                      <AppRows key={app.id} app={app} />
+                      <AppRows
+                        key={app.id}
+                        app={app}
+                        open={expanded.has(app.id)}
+                        busy={!!busy}
+                        items={items}
+                        onToggle={toggleExpanded}
+                        onReview={openAppReview}
+                        onReveal={reveal}
+                      />
                     ))}
                   </tbody>
                 </table>
@@ -521,54 +499,14 @@ export function App() {
                 </div>
                 <div className="leftover-list">
                   {visibleLeftovers.map((item) => (
-                    <article className="leftover" key={item.id}>
-                      <label>
-                        <input
-                          type="checkbox"
-                          aria-label={`Select ${item.path}`}
-                          title={
-                            !removable(item)
-                              ? 'Unavailable: this item is protected or incompletely measured.'
-                              : busy
-                                ? 'Wait for the current operation to finish.'
-                                : 'Select this item'
-                          }
-                          disabled={!!busy || !removable(item)}
-                          checked={selected.has(item.id)}
-                          onChange={() => setSelected(toggle(selected, item.id))}
-                        />
-                      </label>
-                      <div className="leftover-body">
-                        <div className="leftover-title">
-                          <h3>{item.name}</h3>
-                          <span
-                            className={`badge ${item.confidence === 'uncertain' ? 'amber' : ''}`}
-                          >
-                            {item.confidence === 'uncertain'
-                              ? 'Uncertain owner'
-                              : 'No owner identified'}
-                          </span>
-                          {!removable(item) && <span className="badge">Protected</span>}
-                          <strong>
-                            {formatBytes(item.bytes)}
-                            {item.partial ? ' · partial' : ''}
-                          </strong>
-                        </div>
-                        <code>{item.path}</code>
-                        <p>
-                          {categoryNames[item.category]} · Latest observed file change:{' '}
-                          {date(item.latestChange)}
-                        </p>
-                        <p>{item.reason}</p>
-                      </div>
-                      <button
-                        className="text-button"
-                        disabled={!!busy}
-                        onClick={() => void reveal(item)}
-                      >
-                        Show in Finder ↗
-                      </button>
-                    </article>
+                    <LeftoverRow
+                      key={item.id}
+                      item={item}
+                      checked={selected.has(item.id)}
+                      busy={!!busy}
+                      onToggle={toggleSelected}
+                      onReveal={reveal}
+                    />
                   ))}
                   {!visibleLeftovers.length && (
                     <p className="no-results">No possible leftovers match this view.</p>
@@ -596,28 +534,24 @@ export function App() {
               </>
             )}
             {related.length > 0 && (
-              <details className="shared">
-                <summary>
-                  Possible related app data{' '}
-                  <span>
-                    {formatBytes(sum(related))} · protected · counted once outside app totals
-                  </span>
-                </summary>
-                {related.map((item) => (
-                  <PathItem item={item} key={item.id} />
-                ))}
-              </details>
+              <PathList
+                key={`${snapshot.id}-related`}
+                title="Possible related app data"
+                caption={`${formatBytes(sum(related))} · protected · counted once outside app totals`}
+                items={related}
+                busy={!!busy}
+                onReveal={reveal}
+              />
             )}
             {shared.length > 0 && (
-              <details className="shared">
-                <summary>
-                  Shared & system data{' '}
-                  <span>{formatBytes(sum(shared))} · protected · counted once</span>
-                </summary>
-                {shared.map((item) => (
-                  <PathItem item={item} key={item.id} />
-                ))}
-              </details>
+              <PathList
+                key={`${snapshot.id}-shared`}
+                title="Shared & system data"
+                caption={`${formatBytes(sum(shared))} · protected · counted once`}
+                items={shared}
+                busy={!!busy}
+                onReveal={reveal}
+              />
             )}
             <footer>
               <ShieldCheck size={14} />
@@ -698,7 +632,9 @@ export function App() {
             </div>
             <div className="review-paths">
               {plan
-                ? plan.items.map((item) => <PathItem item={item} key={item.id} />)
+                ? plan.items.map((item) => (
+                    <PathItem item={item} key={item.id} busy={!!busy} onReveal={reveal} />
+                  ))
                 : ['bundle', 'cache', 'data'].map((group) => {
                     const groupItems = reviewItems.filter((item) =>
                       group === 'bundle'
@@ -731,7 +667,9 @@ export function App() {
                                 }
                                 disabled={!!busy || !removable(item)}
                                 checked={appSelection.has(item.id)}
-                                onChange={() => setAppSelection(toggle(appSelection, item.id))}
+                                onChange={() =>
+                                  setAppSelection((values) => toggle(values, item.id))
+                                }
                               />
                               <div>
                                 <code>{item.path}</code>
@@ -783,95 +721,287 @@ export function App() {
       )}
     </div>
   )
+}
 
-  function AppRows({ app }: { app: InstalledApp }) {
-    const open = expanded.has(app.id)
-    return (
-      <>
-        <tr className={open ? 'expanded-row' : ''}>
-          <td>
-            <button
-              className="app-name"
-              aria-expanded={open}
-              aria-label={`Details for ${app.name}`}
-              onClick={() => setExpanded(toggle(expanded, app.id))}
-            >
-              {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-              <span className="app-icon">
-                <AppWindow size={21} />
-              </span>
-              <span>
-                <strong>{app.name}</strong>
-                <small>
-                  {app.protected ? 'Protected · ' : ''}
-                  {app.partial ? 'Partial · ' : ''}
-                  {app.bundleId ?? 'Bundle identity unknown'}
-                </small>
-              </span>
+const sum = (entries: ScanItem[]) => entries.reduce((total, item) => total + item.bytes, 0)
+const toggle = (values: Set<string>, id: string) => {
+  const next = new Set(values)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  return next
+}
+const PathItem = memo(function PathItem({
+  item,
+  busy,
+  onReveal
+}: {
+  item: ScanItem
+  busy: boolean
+  onReveal: (item: ScanItem) => void
+}) {
+  return (
+    <div className="path-item">
+      <div className="path-top">
+        <span className="category">{categoryNames[item.category]}</span>
+        <strong>
+          {formatBytes(item.bytes)}
+          {item.partial ? ' · partial' : ''}
+        </strong>
+        <button className="text-button" disabled={!!busy} onClick={() => onReveal(item)}>
+          Show in Finder ↗
+        </button>
+      </div>
+      <code>{item.path}</code>
+      <p>
+        {item.reason}
+        {item.skippedSymlinks > 0 &&
+          ` ${item.skippedSymlinks} symlink(s) excluded from measurement.`}
+      </p>
+    </div>
+  )
+})
+const SortHeader = memo(function SortHeader({
+  label,
+  field,
+  title,
+  sort,
+  setSort
+}: {
+  label: string
+  field: SortKey
+  title?: string
+  sort: { key: SortKey; ascending: boolean }
+  setSort: (sort: { key: SortKey; ascending: boolean }) => void
+}) {
+  return (
+    <th aria-sort={sort.key === field ? (sort.ascending ? 'ascending' : 'descending') : 'none'}>
+      <button
+        title={title}
+        onClick={() =>
+          setSort({
+            key: field,
+            ascending: sort.key === field ? !sort.ascending : field === 'name'
+          })
+        }
+      >
+        {label}
+        {sort.key === field ? (
+          sort.ascending ? (
+            <ArrowUp size={12} />
+          ) : (
+            <ArrowDown size={12} />
+          )
+        ) : null}
+        {title && <Info size={12} />}
+      </button>
+    </th>
+  )
+})
+const AppRows = memo(function AppRows({
+  app,
+  open,
+  busy,
+  items,
+  onToggle,
+  onReview,
+  onReveal
+}: {
+  app: InstalledApp
+  open: boolean
+  busy: boolean
+  items: Map<string, ScanItem>
+  onToggle: (id: string) => void
+  onReview: (app: InstalledApp) => void
+  onReveal: (item: ScanItem) => void
+}) {
+  return (
+    <>
+      <tr className={open ? 'expanded-row' : ''}>
+        <td>
+          <button
+            className="app-name"
+            aria-expanded={open}
+            aria-label={`Details for ${app.name}`}
+            onClick={() => onToggle(app.id)}
+          >
+            {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+            <span className="app-icon">
+              <AppWindow size={21} />
+            </span>
+            <span>
+              <strong>{app.name}</strong>
+              <small>
+                {app.protected ? 'Protected · ' : ''}
+                {app.partial ? 'Partial · ' : ''}
+                {app.bundleId ?? 'Bundle identity unknown'}
+              </small>
+            </span>
+          </button>
+        </td>
+        <td>{formatBytes(app.appBytes)}</td>
+        <td>
+          {formatBytes(app.dataBytes)}
+          {!!app.relatedItemIds?.length && (
+            <div className="date">
+              {app.relatedItemIds.length} possible related{' '}
+              {app.relatedItemIds.length === 1 ? 'path' : 'paths'}
+            </div>
+          )}
+        </td>
+        <td className="total">{formatBytes(app.totalBytes)}</td>
+        <td className="date">{date(app.lastOpened)}</td>
+        <td className="date" title={changedHelp}>
+          {date(app.dataLastChanged)}
+        </td>
+        <td>
+          {app.protected ? (
+            <span className="protected">
+              <LockKeyhole size={13} />
+              Protected
+            </span>
+          ) : (
+            <button className="review-button" disabled={!!busy} onClick={() => onReview(app)}>
+              Review removal
             </button>
-          </td>
-          <td>{formatBytes(app.appBytes)}</td>
-          <td>
-            {formatBytes(app.dataBytes)}
+          )}
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={7} className="expanded-content">
+            <div className="app-detail-heading">
+              <strong>Bundle & every matched path</strong>
+              <span>Shared and possible related paths are protected and excluded from totals.</span>
+            </div>
+            {[app.bundleItemId, ...app.dataItemIds, ...app.sharedItemIds].map((id) => {
+              const item = items.get(id)
+              return item && <PathItem key={id} item={item} busy={busy} onReveal={onReveal} />
+            })}
             {!!app.relatedItemIds?.length && (
-              <div className="date">
-                {app.relatedItemIds.length} possible related{' '}
-                {app.relatedItemIds.length === 1 ? 'path' : 'paths'}
-              </div>
+              <>
+                <div className="app-detail-heading">
+                  <strong>Possible related paths</strong>
+                  <span>Ownership unconfirmed · protected · excluded from totals</span>
+                </div>
+                {app.relatedItemIds.map((id) => {
+                  const item = items.get(id)
+                  return item && <PathItem key={id} item={item} busy={busy} onReveal={onReveal} />
+                })}
+              </>
             )}
-          </td>
-          <td className="total">{formatBytes(app.totalBytes)}</td>
-          <td className="date">{date(app.lastOpened)}</td>
-          <td className="date" title={changedHelp}>
-            {date(app.dataLastChanged)}
-          </td>
-          <td>
-            {app.protected ? (
-              <span className="protected">
-                <LockKeyhole size={13} />
-                Protected
-              </span>
-            ) : (
-              <button
-                className="review-button"
-                disabled={!!busy}
-                onClick={() => openAppReview(app)}
-              >
-                Review removal
-              </button>
-            )}
+            {app.uninstaller && <p className="vendor-note">{app.uninstaller}</p>}
           </td>
         </tr>
-        {open && (
-          <tr>
-            <td colSpan={7} className="expanded-content">
-              <div className="app-detail-heading">
-                <strong>Bundle & every matched path</strong>
-                <span>
-                  Shared and possible related paths are protected and excluded from totals.
-                </span>
+      )}
+    </>
+  )
+})
+const LeftoverRow = memo(function LeftoverRow({
+  item,
+  checked,
+  busy,
+  onToggle,
+  onReveal
+}: {
+  item: ScanItem
+  checked: boolean
+  busy: boolean
+  onToggle: (id: string) => void
+  onReveal: (item: ScanItem) => void
+}) {
+  return (
+    <article className="leftover">
+      <label>
+        <input
+          type="checkbox"
+          aria-label={`Select ${item.path}`}
+          title={
+            !removable(item)
+              ? 'Unavailable: this item is protected or incompletely measured.'
+              : busy
+                ? 'Wait for the current operation to finish.'
+                : 'Select this item'
+          }
+          disabled={!!busy || !removable(item)}
+          checked={checked}
+          onChange={() => onToggle(item.id)}
+        />
+      </label>
+      <div className="leftover-body">
+        <div className="leftover-title">
+          <h3>{item.name}</h3>
+          <span className={`badge ${item.confidence === 'uncertain' ? 'amber' : ''}`}>
+            {item.confidence === 'uncertain' ? 'Uncertain owner' : 'No owner identified'}
+          </span>
+          {!removable(item) && <span className="badge">Protected</span>}
+          <strong>
+            {formatBytes(item.bytes)}
+            {item.partial ? ' · partial' : ''}
+          </strong>
+        </div>
+        <code>{item.path}</code>
+        <p>
+          {categoryNames[item.category]} · Latest observed file change: {date(item.latestChange)}
+        </p>
+        <p>{item.reason}</p>
+      </div>
+      <button className="text-button" disabled={!!busy} onClick={() => onReveal(item)}>
+        Show in Finder ↗
+      </button>
+    </article>
+  )
+})
+const PathList = memo(function PathList({
+  title,
+  caption,
+  items,
+  busy,
+  onReveal
+}: {
+  title: string
+  caption: string
+  items: ScanItem[]
+  busy: boolean
+  onReveal: (item: ScanItem) => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <details className="shared" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>
+        {title} <span>{caption}</span>
+      </summary>
+      {open &&
+        items.map((item) => <PathItem key={item.id} item={item} busy={busy} onReveal={onReveal} />)}
+    </details>
+  )
+})
+const SkippedLocations = memo(function SkippedLocations({
+  skipped
+}: {
+  skipped: ScanSnapshot['skipped']
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <details className="skipped" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>
+        {skipped.length.toLocaleString()} skipped locations or entries · inspect scan limitations
+      </summary>
+      {open && (
+        <>
+          <p>
+            Denied access, missing locations, and symlinks outside app packages are excluded. Sizes
+            may be lower than actual usage. Incomplete items are protected from removal.
+          </p>
+          <div className="skipped-list">
+            {skipped.map((entry, index) => (
+              <div key={index}>
+                <code>{entry.path}</code>
+                <small>{entry.reason}</small>
               </div>
-              {[app.bundleItemId, ...app.dataItemIds, ...app.sharedItemIds].map((id) => {
-                const item = items.get(id)
-                return item && <PathItem key={id} item={item} />
-              })}
-              {!!app.relatedItemIds?.length && (
-                <>
-                  <div className="app-detail-heading">
-                    <strong>Possible related paths</strong>
-                    <span>Ownership unconfirmed · protected · excluded from totals</span>
-                  </div>
-                  {app.relatedItemIds.map((id) => {
-                    const item = items.get(id)
-                    return item && <PathItem key={id} item={item} />
-                  })}
-                </>
-              )}
-              {app.uninstaller && <p className="vendor-note">{app.uninstaller}</p>}
-            </td>
-          </tr>
-        )}
-      </>
-    )
-  }
-}
+            ))}
+          </div>
+        </>
+      )}
+    </details>
+  )
+})
