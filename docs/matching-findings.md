@@ -1,5 +1,7 @@
 # Matching investigation — November 9, 2026
 
+This is a historical report of the previous matcher. The current implementation uses adaptive product-name/vendor rules and treats app bundles as opaque packages; embedded helper IDs are no longer indexed. See [current scan behavior](scan-behavior.md).
+
 A separate production Electron instance ran the real scanner with Trash disabled. Application bundle metadata and direct-child Library candidates were inspected locally. The scan found 202 installed apps and 1,375 data candidates. Permission failures, skipped symlinks, and partial items were retained; this is not a complete inventory of the disk.
 
 The old matcher recognized only exact root bundle IDs and five audited folder aliases. It left 1,172 candidates (49.77 GiB) under Possible leftovers, including many paths associated with installed software. The updated matcher was evaluated against that same snapshot using embedded metadata from a fresh scan; the fresh scan independently produced the same counts and byte totals.

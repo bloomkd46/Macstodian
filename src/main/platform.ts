@@ -44,7 +44,7 @@ export function createMacPlatform(run: CommandRunner = exec): Platform {
       // Native package accounting only: no candidate discovery or helper indexing
       // inside .app bundles. Both tools use physical traversal, never following links.
       const [size, manifest] = await Promise.all([
-        run('/usr/bin/du', ['-s', '-A', '-B', '1', '-P', path], {
+        run('/usr/bin/du', ['-s', '-A', '-k', '-P', path], {
           timeout: 120000,
           maxBuffer: 1024 * 1024
         }),
@@ -54,7 +54,9 @@ export function createMacPlatform(run: CommandRunner = exec): Platform {
           { timeout: 120000, maxBuffer: 64 * 1024 * 1024 }
         )
       ])
-      const bytes = Number(size.stdout.match(/^(\d+)\s/)?.[1])
+      // du's -B controls accounting blocks, not output units. Explicit -k
+      // makes output independent of BLOCKSIZE and always reports KiB.
+      const bytes = Number(size.stdout.match(/^(\d+)\s/)?.[1]) * 1024
       if (!Number.isSafeInteger(bytes) || bytes < 0 || !manifest.stdout.trim())
         throw new Error('Could not measure application package.')
       return {

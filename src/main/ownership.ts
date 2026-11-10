@@ -69,7 +69,7 @@ const words = (value: string) =>
 const compact = (value: string) => words(value).join('')
 const PRODUCT_ROLES = new Set(['app', 'desktop', 'launcher', 'client', 'browser'])
 const usableName = (name: string) =>
-  compact(name).length >= 4 &&
+  compact(name).length > 0 &&
   !GENERIC_NAMES.has(name.toLowerCase()) &&
   !['app', 'helper', 'updater', 'client', 'desktop', 'browser', 'editor', 'software'].includes(
     compact(name)
@@ -86,7 +86,8 @@ export function createOwnershipMatcher(apps: InstalledApp[]) {
         ...(app.ownershipNames ?? [])
       ])
       // Product identifiers can retain names omitted from the display name.
-      if (parts.length >= 3 && usableName(parts.at(-1)!)) names.add(parts.at(-1)!)
+      if (parts.length >= 3 && compact(parts.at(-1)!).length >= 4 && usableName(parts.at(-1)!))
+        names.add(parts.at(-1)!)
       for (const name of [...names]) {
         const tokens = words(name)
         if (PRODUCT_ROLES.has(tokens.at(-1) ?? '')) names.add(tokens.slice(0, -1).join(' '))
@@ -216,7 +217,7 @@ function match(
   const prefixes = metadata.flatMap(({ app, names }) =>
     names.flatMap((name) => {
       const base = compact(name)
-      if (!normalized.startsWith(base)) return []
+      if (base.length < 3 || !normalized.startsWith(base)) return []
       const keyWords = words(key)
       // Require an actual word boundary; "Code" must not match "Codec".
       const boundary = keyWords.some((_, index) => keyWords.slice(0, index + 1).join('') === base)

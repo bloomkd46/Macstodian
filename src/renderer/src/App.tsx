@@ -391,7 +391,8 @@ export function App() {
                 <span>POSSIBLE LEFTOVERS</span>
                 <strong>{formatBytes(totals.leftovers)}</strong>
                 <small>
-                  {leftovers.length.toLocaleString()} paths · includes protected and uncertain data
+                  {leftovers.length.toLocaleString()} {leftovers.length === 1 ? 'path' : 'paths'} ·
+                  includes protected and uncertain data
                 </small>
               </div>
             </section>
