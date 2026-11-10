@@ -97,14 +97,25 @@ describe('scanner and conservative ownership', () => {
     expect(result.view.apps.map((app) => app.name).sort()).toEqual(['Acme', 'Built in', 'Nested'])
     expect(result.view.apps.find((app) => app.name === 'Built in')?.protected).toBe(true)
   })
-  it('reserves confirmed ownership for exact IDs / audited aliases and protects name suggestions', async () => {
+  it('reserves confirmed ownership for exact IDs and derives protected names from metadata', async () => {
     await bundle('Acme')
-    await bundle('Visual Studio Code', 'com.microsoft.VSCode')
+    const codePath = await bundle('Visual Studio Code', 'com.microsoft.VSCode')
+    await file(
+      join(codePath, 'Contents/fixture.json'),
+      JSON.stringify({
+        bundleId: 'com.microsoft.VSCode',
+        name: 'Visual Studio Code',
+        names: ['Visual Studio Code', 'Code']
+      })
+    )
     const { view } = await scan(config, platform)
     expect(matchOwnership('dev.acme.Editor.plist', 'preferences', view.apps).confidence).toBe(
       'exact'
     )
-    expect(matchOwnership('Code', 'support', view.apps).confidence).toBe('alias')
+    expect(matchOwnership('Code', 'support', view.apps)).toMatchObject({
+      confidence: 'related',
+      protected: true
+    })
     expect(matchOwnership('Acme', 'support', view.apps)).toMatchObject({
       confidence: 'related',
       protected: true,
@@ -196,10 +207,13 @@ describe('scanner and conservative ownership', () => {
       'dev.acme.EditorBeta',
       'dev.acme.Edit',
       'dev.acme.Other',
-      'not-dev.acme.Editor',
       'dev.acme.Editor_stats.txt'
     ])
-      expect(matchOwnership(name, 'preferences', view.apps).ownerIds).toEqual([])
+      expect(matchOwnership(name, 'preferences', view.apps)).toMatchObject({
+        confidence: 'shared',
+        protected: true
+      })
+    expect(matchOwnership('not-dev.acme.Editor', 'preferences', view.apps).ownerIds).toEqual([])
     expect(matchOwnership('dev.acme.Editor.plist', 'preferences', view.apps).confidence).toBe(
       'exact'
     )
@@ -333,6 +347,165 @@ describe('scanner and conservative ownership', () => {
     expect(matchOwnership('Nebula Studio 4', 'support', view.apps).ownerIds).toEqual([
       view.apps.find((app) => app.name === 'Nebula Studio')!.id
     ])
+  })
+  it('relates installers through a brand namespace without a per-product alias', async () => {
+    await bundle('Docker', 'com.docker.docker')
+    await bundle('RiverWorks', 'net.riverworks.desktop')
+    const { view } = await scan(config, platform)
+    for (const [name, appName] of [
+      ['com.docker.install', 'Docker'],
+      ['net.riverworks.updater', 'RiverWorks']
+    ])
+      expect(matchOwnership(name!, 'support', view.apps)).toMatchObject({
+        confidence: 'related',
+        protected: true,
+        ownerIds: [view.apps.find((app) => app.name === appName)!.id]
+      })
+    expect(matchOwnership('com.dockerish.install', 'support', view.apps).ownerIds).toEqual([])
+    expect(matchOwnership('net.riverworks.another-product', 'support', view.apps)).toMatchObject({
+      confidence: 'shared',
+      protected: true
+    })
+  })
+  it('finds product stems and version/helper suffixes inside their own namespace', async () => {
+    await bundle('OneDrive', 'com.microsoft.OneDrive')
+    await bundle('Word', 'com.microsoft.Word')
+    await bundle('AutoCAD', 'com.autodesk.AutoCAD2027')
+    await bundle('zoom.us', 'us.zoom.xos')
+    await bundle('Raspberry Pi Imager', 'org.raspberrypi.imagingutility')
+    const { view } = await scan(config, platform)
+    for (const [name, appName] of [
+      ['com.microsoft.OneDriveStandaloneUpdater', 'OneDrive'],
+      ['com.microsoft.onedriveupdater', 'OneDrive'],
+      ['com.autodesk.AutoCAD2024', 'AutoCAD'],
+      ['us.zoom.ZoomAutoUpdater', 'zoom.us'],
+      ['org.raspberrypi.Imager', 'Raspberry Pi Imager']
+    ])
+      expect(matchOwnership(name!, 'cache', view.apps)).toMatchObject({
+        ownerIds: [view.apps.find((app) => app.name === appName)!.id],
+        confidence: 'related',
+        protected: true
+      })
+    for (const name of ['com.microsoft.OneDriveish', 'com.microsoft.SomeOtherProduct'])
+      expect(matchOwnership(name, 'cache', view.apps)).toMatchObject({
+        confidence: 'shared',
+        protected: true
+      })
+  })
+  it('derives vendor names, corporate suffixes, and vendor-prefixed logs from installed IDs', async () => {
+    await bundle('Brave Browser', 'com.brave.Browser')
+    await bundle('Raspberry Pi Imager', 'org.raspberrypi.imagingutility')
+    await bundle('AutoCAD', 'com.autodesk.AutoCAD2027')
+    await bundle('River Editor', 'net.riverworks.editor')
+    const { view } = await scan(config, platform)
+    for (const [name, appName] of [
+      ['BraveSoftware', 'Brave Browser'],
+      ['Raspberry Pi', 'Raspberry Pi Imager'],
+      ['autodesk.webdeploy.streamer.log', 'AutoCAD'],
+      ['RiverWorks LLC', 'River Editor']
+    ])
+      expect(matchOwnership(name!, 'logs', view.apps)).toMatchObject({
+        ownerIds: [view.apps.find((app) => app.name === appName)!.id],
+        confidence: 'shared',
+        protected: true
+      })
+  })
+  it('learns alternate vendor domains from complete product names, independent of candidate order', async () => {
+    await bundle('4K Video Downloader+', 'com.openmedia.4kvideodownloaderplus')
+    const { view } = await scan(config, platform)
+    const candidates = [
+      { name: 'com.4kdownload.Applications.plist', category: 'preferences' as const },
+      { name: 'com.4kdownload.4K Video Downloader+.plist', category: 'preferences' as const }
+    ]
+    for (const inventory of [candidates, [...candidates].reverse()]) {
+      expect(matchOwnership('4kdownload.com', 'support', view.apps, inventory)).toMatchObject({
+        ownerIds: [view.apps[0]!.id],
+        confidence: 'shared',
+        protected: true
+      })
+      expect(
+        matchOwnership(candidates[1]!.name, 'preferences', view.apps, inventory)
+      ).toMatchObject({
+        ownerIds: [view.apps[0]!.id],
+        confidence: 'related',
+        protected: true
+      })
+    }
+    expect(matchOwnership('4kdownload.com', 'support', view.apps).ownerIds).toEqual([])
+  })
+  it('protects an observed vendor folder without hiding uninstalled product identifiers', () => {
+    const candidates = [
+      { name: 'com.google.android.studio.plist', category: 'preferences' as const },
+      { name: 'group.com.example.shared.plist', category: 'preferences' as const },
+      { name: 'systemgroup.com.example.shared.plist', category: 'preferences' as const }
+    ]
+    for (const name of ['Google', 'google-heartbeat-storage'])
+      expect(matchOwnership(name, 'support', [], candidates)).toMatchObject({
+        confidence: 'shared',
+        protected: true,
+        ownerIds: []
+      })
+    for (const name of [
+      'com.google.android.studio',
+      'com.macpaw.CleanMyMac4',
+      'com.other.Absent',
+      'Canscope'
+    ])
+      expect(matchOwnership(name, 'support', [], candidates)).toMatchObject({
+        confidence: 'unmatched',
+        ownerIds: []
+      })
+  })
+  it('does not spread vendor relationships across generic runtimes or technical words', async () => {
+    await bundle('DigiGoat', 'com.electron.digigoat')
+    await bundle('Docker', 'com.docker.docker')
+    await bundle('Unrelated Tool', 'com.core.fixture')
+    await bundle('GitHub Copilot', 'com.github.githubapp')
+    const { view } = await scan(config, platform)
+    const candidates = [
+      { name: 'com.electron.dockerdesktop.plist', category: 'preferences' as const },
+      { name: 'com.electron.web-builder.plist', category: 'preferences' as const }
+    ]
+    expect(matchOwnership(candidates[0]!.name, 'preferences', view.apps, candidates)).toMatchObject(
+      {
+        ownerIds: [view.apps.find((app) => app.name === 'Docker')!.id],
+        confidence: 'related',
+        protected: true
+      }
+    )
+    for (const name of [
+      'com.electron.web-builder',
+      'com.electron.angular-electron',
+      'com.github.Electron',
+      'CoreSimulator'
+    ])
+      expect(matchOwnership(name, 'support', view.apps, candidates).ownerIds).toEqual([])
+  })
+  it('counts newly inferred product and vendor paths once, outside confirmed app totals', async () => {
+    await bundle('Docker', 'com.docker.docker')
+    await bundle('Word', 'com.microsoft.Word')
+    await bundle('Excel', 'com.microsoft.Excel')
+    await data('com.docker.install', 'installer')
+    await data('com.microsoft.autoupdate2', 'shared updater')
+    const { view } = await scan(config, platform)
+    const docker = view.apps.find((app) => app.name === 'Docker')!
+    expect(docker.relatedItemIds).toHaveLength(1)
+    expect(view.items.filter((item) => item.name === 'com.microsoft.autoupdate2')).toHaveLength(1)
+    expect(
+      view.items.find((item) => item.name === 'com.microsoft.autoupdate2')!.ownerIds
+    ).toHaveLength(2)
+    for (const app of view.apps) {
+      expect(app.dataBytes).toBe(0)
+      expect(app.totalBytes).toBe(app.appBytes)
+    }
+  })
+  it('does not assume an old audited folder alias when it is absent from bundle metadata', async () => {
+    await bundle('Unrelated Product', 'com.microsoft.VSCode')
+    const { view } = await scan(config, platform)
+    expect(matchOwnership('Code', 'support', view.apps)).toMatchObject({
+      confidence: 'unmatched',
+      ownerIds: []
+    })
   })
   it('counts a shared vendor directory once, outside all individual app totals', async () => {
     await bundle('One', 'com.microsoft.One')
@@ -492,11 +665,15 @@ describe('macOS metadata and running checks', () => {
 describe('removal review, confirmation and revalidation', () => {
   it('rejects related paths in app and leftover reviews, even if a protected flag is lost', async () => {
     await bundle()
+    await bundle('Docker', 'com.docker.docker')
     await data('Acme')
+    await data('com.docker.install')
     const snapshot = await scan(config, platform),
       app = snapshot.view.apps[0]!
     const related = snapshot.view.items.find((item) => item.name === 'Acme')!
-    expect(app.relatedItemIds).toEqual([related.id])
+    expect(snapshot.view.apps.find((app) => app.name === 'Acme')!.relatedItemIds).toEqual([
+      related.id
+    ])
     related.protected = false
     const trash = vi.fn(),
       service = new RemovalService(config, platform, trash)
@@ -505,6 +682,11 @@ describe('removal review, confirmation and revalidation', () => {
       await expect(
         service.review({ scanId: snapshot.view.id, itemIds: [related.id], appId })
       ).rejects.toThrow('Protected')
+    const installer = snapshot.view.items.find((item) => item.name === 'com.docker.install')!
+    installer.protected = false
+    await expect(
+      service.review({ scanId: snapshot.view.id, itemIds: [installer.id] })
+    ).rejects.toThrow('Protected')
     expect(trash).not.toHaveBeenCalled()
   })
   async function setup() {
@@ -620,6 +802,7 @@ describe('removal review, confirmation and revalidation', () => {
   it('rejects protected system apps, shared data, and partial items', async () => {
     await bundle('System', 'com.apple.fixture', true)
     await data('Microsoft')
+    await data('com.microsoft.shared')
     const snapshot = await scan(config, platform),
       service = new RemovalService(config, platform, vi.fn()),
       app = snapshot.view.apps[0]!

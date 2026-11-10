@@ -1,5 +1,5 @@
 export type Category = 'bundle' | 'support' | 'cache' | 'preferences' | 'logs' | 'savedState'
-export type Confidence = 'exact' | 'alias' | 'related' | 'uncertain' | 'unmatched' | 'shared'
+export type Confidence = 'exact' | 'related' | 'uncertain' | 'unmatched' | 'shared'
 
 export interface ScanItem {
   id: string

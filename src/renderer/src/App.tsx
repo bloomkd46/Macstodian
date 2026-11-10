@@ -505,9 +505,9 @@ export function App() {
                 <div className="notice subtle">
                   <Info size={17} />
                   <span>
-                    Unmatched does not mean unused. Bundle IDs and audited aliases identify owners.
-                    Possible name and helper associations appear under app details, protected and
-                    excluded from totals. Generic, shared, and protected data cannot be selected.
+                    Unmatched does not mean unused. Exact bundle IDs identify owners. Possible name
+                    and helper associations appear under app details, protected and excluded from
+                    totals. Generic, shared, and protected data cannot be selected.
                   </span>
                 </div>
                 <div className="leftover-list">
