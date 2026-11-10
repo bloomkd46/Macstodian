@@ -762,6 +762,15 @@ input[type='checkbox']:checked::after {
   border-bottom: 2px solid var(--on-accent);
   transform: translateY(-1px) rotate(-45deg);
 }
+input[type='checkbox']:indeterminate {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+input[type='checkbox']:indeterminate::after {
+  content: '';
+  width: 8px;
+  border-top: 2px solid var(--on-accent);
+}
 input[type='checkbox']:disabled {
   cursor: not-allowed;
   border: 1px dashed var(--text-muted);
@@ -817,6 +826,55 @@ input[type='checkbox']:disabled:checked::after {
 .leftover p {
   font-size: 10px;
   margin: 7px 0 0;
+}
+.grouped-leftover {
+  display: block;
+}
+.group-header,
+.group-path {
+  display: flex;
+  align-items: flex-start;
+  gap: 15px;
+}
+.group-header > label,
+.group-path > label {
+  padding-top: 3px;
+}
+.group-expand {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-weight: inherit;
+  text-align: left;
+  white-space: normal;
+}
+.group-expand:hover {
+  background: transparent;
+  color: var(--accent-text);
+}
+.leftover .group-categories {
+  margin-left: 22px;
+}
+.group-paths {
+  margin: 15px 0 0 31px;
+  border-top: 1px solid var(--border-soft);
+}
+.group-path {
+  padding: 13px 0;
+}
+.group-path + .group-path {
+  border-top: 1px solid var(--border-soft);
+}
+.group-path-body {
+  flex: 1;
+  min-width: 0;
+}
+.group-path > strong {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.group-path > .text-button {
+  align-self: flex-start;
 }
 .selection-bar {
   position: sticky;
