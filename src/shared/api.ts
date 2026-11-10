@@ -35,6 +35,15 @@ export interface InstalledApp {
   protected: boolean
   uninstaller: string | null
 }
+export const reviewableRelatedPath = (item: ScanItem, app: InstalledApp): boolean =>
+  item.category !== 'bundle' &&
+  item.confidence === 'related' &&
+  !item.partial &&
+  !app.protected &&
+  !!app.bundleId &&
+  item.ownerIds.length === 1 &&
+  item.ownerIds[0] === app.id &&
+  app.relatedItemIds.includes(item.id)
 export interface SkippedLocation {
   path: string
   reason: string

@@ -991,6 +991,10 @@ input[type='checkbox']:disabled:checked::after {
   margin: 7px 0;
   align-items: flex-start;
 }
+.review-choice.possible-choice {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
 .review-choice div {
   min-width: 0;
 }
@@ -999,6 +1003,9 @@ input[type='checkbox']:disabled:checked::after {
   font-size: 10px;
   color: var(--text-quiet);
   margin-top: 7px;
+}
+.review-choice .match-reason {
+  line-height: 1.5;
 }
 .modal-actions {
   border-top: 1px solid var(--border);

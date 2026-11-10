@@ -34,9 +34,16 @@ const items = [
     latestChange: Date.UTC(2025, 0, 4, 12)
   },
   {
-    ...item('related', 'support', '/fixture/Library/Application Support/Alpha', 90, ['alpha']),
+    ...item(
+      'related',
+      'support',
+      '/fixture/Library/Application Support/Alpha',
+      90,
+      ['alpha'],
+      true
+    ),
     confidence: 'related',
-    reason: 'Possible relation by exact product name; protected from removal.'
+    reason: 'Possible relation by exact product name; ownership unconfirmed.'
   },
   {
     ...item(
@@ -155,26 +162,34 @@ try {
   await page.getByRole('button', { name: 'Details for Alpha', exact: true }).click()
   await page.getByRole('button', { name: 'Review removal', exact: true }).first().click()
   let dialog = page.getByRole('dialog')
-  await expect(dialog.getByRole('checkbox')).toHaveCount(3)
-  await expect(dialog).not.toContainText('/fixture/Library/Application Support/Alpha')
+  await expect(dialog.getByRole('checkbox')).toHaveCount(4)
+  await expect(dialog).toContainText('Possible related data · ownership unconfirmed')
+  await expect(dialog).toContainText('/fixture/Library/Application Support/Alpha')
   await expect(dialog.getByRole('checkbox').first()).toBeChecked()
   await expect(dialog.getByRole('checkbox').nth(1)).not.toBeChecked()
   await expect(dialog.getByRole('checkbox').nth(2)).not.toBeChecked()
+  const possiblePath = dialog.getByRole('checkbox', {
+    name: 'Include /fixture/Library/Application Support/Alpha'
+  })
+  await expect(possiblePath).toBeEnabled()
+  await expect(possiblePath).not.toBeChecked()
   await dialog.getByRole('checkbox').nth(1).check()
   await dialog.getByRole('checkbox').nth(2).check()
+  await possiblePath.check()
   await checkAppearance('dark', 'review', ['.modal', '.review-choice'])
   await checkAppearance('light', 'review', ['.modal', '.review-choice'])
   await expect(dialog.getByRole('checkbox').nth(1)).toBeChecked()
   await expect(dialog.getByRole('checkbox').nth(2)).toBeChecked()
+  await expect(possiblePath).toBeChecked()
   await checkAppearance('dark', 'review', ['.modal', '.review-choice'])
   await dialog.getByRole('button', { name: 'Review selected paths' }).click()
   await expect(page.getByRole('heading', { name: 'Confirm move to Trash' })).toBeVisible()
-  expect(await dialog.locator('.path-item').count()).toBe(3)
+  expect(await dialog.locator('.path-item').count()).toBe(4)
   const request = await electronApp.evaluate(() => globalThis.__uiTest.requests[0])
   expect(request).toEqual({
     scanId: 'scan-1',
     appId: 'alpha',
-    itemIds: ['bundle', 'cache', 'data']
+    itemIds: ['bundle', 'cache', 'data', 'related']
   })
   expect(await electronApp.evaluate(() => globalThis.__uiTest.confirmations)).toBe(0)
   await dialog.getByRole('button', { name: 'Confirm move to Trash' }).click()
@@ -323,7 +338,7 @@ try {
   const report = {
     passed: [
       'app bundle selected; all data unchecked by default',
-      'possible related paths visible in app details and excluded from removal review',
+      'possible related paths offered unchecked in their app review and included only by choice',
       'possible associations excluded from leftovers and counted once in the scan summary',
       'separate cache and settings choices',
       'review lists all selected paths before confirmation',
