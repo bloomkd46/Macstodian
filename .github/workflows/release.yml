@@ -18,10 +18,10 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       publish: ${{ steps.release.outputs.publish }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       - name: Determine release version
@@ -62,8 +62,8 @@ jobs:
           - runner: macos-15-intel
             arch: x64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       - name: Enable Corepack
@@ -92,7 +92,7 @@ jobs:
           test -s "release/$name"
           cd release
           shasum -a 256 "$name" > "SHA256SUMS-${BUILD_ARCH}.txt"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macstodian-${{ matrix.arch }}
           path: |
@@ -107,7 +107,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: macstodian-*
           path: release
