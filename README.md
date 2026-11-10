@@ -45,7 +45,7 @@ Local packaging is unsigned. Distribution requires your own signing identity, no
 
 - Apps are discovered recursively in `/Applications`, `~/Applications`, and `/System/Applications`, stopping at bundles. System apps participate in matching and are protected.
 - Data scanning covers only direct children of `~/Library/{Application Support,Caches,Preferences,Logs,Saved Application State}`, measured recursively. Containers, Group Containers, `/Library`, services, and arbitrary disk locations are outside scope.
-- Ownership uses exact bundle IDs and a small audited alias list. Generic names are uncertain. **Possible leftovers** means no installed owner was identified; files may still be useful. Shared/vendor/system data is protected and counted once outside individual app totals.
+- Confirmed ownership uses exact bundle IDs and a small audited alias list. Exact app names, known product names, embedded helper IDs, and identifiers extending an installed ID produce **possible related paths**, protected and excluded from app totals/removal. Shared/vendor/system data is protected and counted once. **Possible leftovers** means neither an installed owner nor a possible association was identified; files may still be useful. Generic names remain uncertain.
 - **Last opened** uses only Spotlight `kMDItemLastUsedDate`; missing/unreadable values are **Unknown**. **Data last changed** uses the newest nested regular-file mtime, excluding caches/logs. Background processes can modify data.
 - Denied access, missing locations, and skipped symlinks are reported. Incomplete targets cannot be removed. Sizes sum logical file lengths; APFS clones, compression, sparse files, metadata, snapshots, and hard links across items can affect actual usage and recovered space.
 - Data starts unchecked. Main resolves IDs and rechecks identity, scope, metadata fingerprints, symlinks, and running apps before Trash. Bundle failure stops data removal. Reviews expire and rescans invalidate old IDs. OS path-based Trash cannot make validation and mutation atomic against hostile path replacement.
@@ -54,3 +54,4 @@ Local packaging is unsigned. Distribution requires your own signing identity, no
 All filesystem access stays in main behind a typed, sandboxed preload. Navigation, new windows, permissions, and external network requests are blocked. No telemetry or uploads.
 
 See [scan and removal details](docs/scan-behavior.md) for accounting rules, race limitations, and vendor guidance sources.
+See [matching investigation](docs/matching-findings.md) for the local scan findings and remaining opportunities.

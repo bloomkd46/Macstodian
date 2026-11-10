@@ -53,6 +53,7 @@ export class RemovalService {
       path !== item.path ||
       item.protected ||
       item.confidence === 'shared' ||
+      item.confidence === 'related' ||
       item.ownerIds.length > 1
     )
       throw new Error(`Protected or shared item cannot be removed: ${item.path}`)
