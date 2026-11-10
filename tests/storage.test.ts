@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   chmod,
+  lstat,
   mkdtemp,
   mkdir,
+  readdir,
   readFile,
   realpath,
   rename,
@@ -12,11 +14,11 @@ import {
   writeFile,
   stat
 } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { matchOwnership } from '../src/main/ownership'
 import {
-  macPlatform,
   createMacPlatform,
   parseSpotlightDate,
   processBelongsToBundle,
@@ -41,6 +43,42 @@ async function data(name = 'dev.acme.Editor', text = 'local data', category = 's
   const location = config.dataRoots.find((entry) => entry.category === category)!
   return file(join(location.path, name, 'nested/file'), text)
 }
+async function measureFixtureBundle(path: string) {
+  let bytes = 0
+  const seen = new Set<string>()
+  const hash = createHash('sha256')
+  const stack = [path]
+  while (stack.length) {
+    const current = stack.pop()!
+    const info = await lstat(current)
+    hash.update(
+      JSON.stringify([
+        current.slice(path.length),
+        info.dev,
+        info.ino,
+        info.mode,
+        info.size,
+        info.mtimeMs,
+        info.ctimeMs,
+        info.birthtimeMs
+      ])
+    )
+    if (info.isSymbolicLink()) continue
+    if (info.isFile()) {
+      const inodeKey = `${info.dev}:${info.ino}`
+      if (!seen.has(inodeKey)) {
+        bytes += info.size
+        seen.add(inodeKey)
+      }
+      continue
+    }
+    if (info.isDirectory()) {
+      const entries = (await readdir(current)).sort().reverse()
+      for (const name of entries) stack.push(join(current, name))
+    }
+  }
+  return { bytes, fingerprint: hash.digest('hex') }
+}
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'macstodian-test-')))
   config = {
@@ -64,7 +102,7 @@ beforeEach(async () => {
     )
   )
   platform = {
-    measureBundle: macPlatform.measureBundle,
+    measureBundle: measureFixtureBundle,
     readBundleInfo: async (path) => {
       try {
         return JSON.parse(await readFile(join(path, 'Contents/fixture.json'), 'utf8'))
