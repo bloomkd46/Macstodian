@@ -22,8 +22,9 @@ Applications are discovered recursively in `/Applications`, `~/Applications`, an
 
 Confirmed ownership uses exact bundle IDs (with `.plist` / `.savedState` suffix handling) and the small auditable alias table in `src/main/ownership.ts`. The matcher also suggests relationships using:
 
-- Exact, case-insensitive matches against `CFBundleDisplayName`, `CFBundleName`, and the `.app` filename. Punctuation, spacing, version, and channel distinctions are retained; no fuzzy or substring matching is used.
-- Explicit product/legacy aliases in `RELATED_ALIASES`. These remain suggestions, separate from the removal-authorizing `KNOWN_ALIASES` table.
+- Names derived from `CFBundleDisplayName`, `CFBundleName`, the `.app` filename, and distinctive product tokens in bundle IDs. Unicode normalization, camel-case word splitting, punctuation/spacing normalization, and optional product roles (Desktop, Launcher, Client, Browser) adapt across devices without a product alias table.
+- Full product names followed by a word/version/channel suffix, such as `Audio Hijack 27`. Exact normalized names win first, then the longest word-boundary prefix; `Code` does not match `Codec`. All inferred relationships remain protected suggestions.
+- Vendor folders and bare vendor namespaces inferred from installed reverse-domain bundle IDs. Known shared/system names remain an explicit protection list even when no vendor apps are installed.
 - Exact bundle IDs read from nested `.app`, `.appex`, and `.xpc` bundles discovered during the existing bundle measurement traversal. No extra filesystem traversal is performed, symlinks are skipped, and at most 256 embedded bundle metadata paths per app are inspected. Framework IDs themselves are not indexed. A helper found in several installed apps is shared/protected.
 - A full installed app/helper ID followed by a dot, or by an underscore for preference SQLite databases and their WAL/SHM sidecars. The longest matching ID wins. These may be updater, helper, or per-feature settings paths; a prefix establishes only a possible relation.
 

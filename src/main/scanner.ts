@@ -11,7 +11,7 @@ import type {
   ScanSnapshot,
   SkippedLocation
 } from '../shared/api'
-import { matchOwnership } from './ownership'
+import { createOwnershipMatcher } from './ownership'
 import type { Platform } from './platform'
 import { vendorUninstaller } from './uninstallers'
 
@@ -368,6 +368,7 @@ export async function scan(
       skip(root.path, errorText(error))
     }
   }
+  const matchOwnership = createOwnershipMatcher(apps)
   await mapLimited(dataCandidates, async ({ path, category }) => {
     try {
       const stat = await assertNoSymlink(path)
@@ -377,7 +378,7 @@ export async function scan(
       })
       if (!sameIdentity(identity(stat), identity(await assertNoSymlink(path))))
         throw new Error('Item changed during scan; rescan required.')
-      const match = matchOwnership(basename(path), category, apps)
+      const match = matchOwnership(basename(path), category)
       const item: ScanItem = {
         id: randomUUID(),
         path,

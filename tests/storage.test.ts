@@ -126,7 +126,7 @@ describe('scanner and conservative ownership', () => {
       confidence: 'uncertain'
     })
   })
-  it('uses both metadata names and the bundle filename, without fuzzy or beta/version matching', async () => {
+  it('uses metadata and filename words adaptively, including channel suffixes', async () => {
     const path = await bundle('BambuStudio', 'com.bambulab.bambu-studio')
     await file(
       join(path, 'Contents/fixture.json'),
@@ -142,14 +142,15 @@ describe('scanner and conservative ownership', () => {
     await data('BambuStudioBeta')
     const { view } = await scan(config, platform),
       app = view.apps[0]!
-    expect(app.relatedItemIds).toHaveLength(3)
+    expect(app.relatedItemIds).toHaveLength(4)
     expect(app.dataItemIds).toEqual([])
     expect(app.dataBytes).toBe(0)
     expect(app.totalBytes).toBe(app.appBytes)
     expect(app.dataLastChanged).toBeNull()
     expect(view.items.find((item) => item.name === 'BambuStudioBeta')).toMatchObject({
-      ownerIds: [],
-      confidence: 'unmatched'
+      ownerIds: [app.id],
+      confidence: 'related',
+      protected: true
     })
   })
   it('keeps duplicate names as multiple protected suggestions and unreadable identities unassociated', async () => {
@@ -259,6 +260,47 @@ describe('scanner and conservative ownership', () => {
       protected: true,
       ownerIds: []
     })
+  })
+  it('infers unseen versions, helper names, punctuation, and product ID names', async () => {
+    await bundle('Audio Hijack', 'com.rogueamoeba.audiohijack')
+    await bundle('Farrago', 'com.rogueamoeba.farrago')
+    await bundle('Nebula Studio', 'io.newvendor.nebulastudio')
+    await bundle('Minecraft Launcher', 'com.mojang.minecraftlauncher')
+    const { view } = await scan(config, platform)
+    for (const [folder, owner] of [
+      ['Audio Hijack 27', 'Audio Hijack'],
+      ['audio-hijack-28-beta', 'Audio Hijack'],
+      ['Farrago 9', 'Farrago'],
+      ['NebulaStudioHelper', 'Nebula Studio'],
+      ['nebula_studio-v3', 'Nebula Studio'],
+      ['minecraft', 'Minecraft Launcher']
+    ]) {
+      expect(matchOwnership(folder!, 'support', view.apps)).toMatchObject({
+        ownerIds: [view.apps.find((app) => app.name === owner)!.id],
+        confidence: 'related',
+        protected: true
+      })
+    }
+    for (const folder of ['Audio Hijacker', 'Nebula Studios', 'Not Nebula Studio', 'Studio'])
+      expect(matchOwnership(folder, 'support', view.apps).ownerIds).toEqual([])
+    expect(matchOwnership('NewVendor', 'support', view.apps)).toMatchObject({
+      confidence: 'shared',
+      protected: true,
+      ownerIds: [view.apps.find((app) => app.name === 'Nebula Studio')!.id]
+    })
+  })
+  it('prefers exact channel names and the longest app-name prefix', async () => {
+    await bundle('Nebula', 'dev.vendor.nebula')
+    await bundle('Nebula Studio', 'dev.vendor.studio')
+    await bundle('Nebula Studio Beta', 'dev.vendor.studiobeta')
+    const { view } = await scan(config, platform)
+    for (const folder of ['Nebula Studio Beta', 'Nebula Studio Beta 4'])
+      expect(matchOwnership(folder, 'support', view.apps).ownerIds).toEqual([
+        view.apps.find((app) => app.name === 'Nebula Studio Beta')!.id
+      ])
+    expect(matchOwnership('Nebula Studio 4', 'support', view.apps).ownerIds).toEqual([
+      view.apps.find((app) => app.name === 'Nebula Studio')!.id
+    ])
   })
   it('counts a shared vendor directory once, outside all individual app totals', async () => {
     await bundle('One', 'com.microsoft.One')

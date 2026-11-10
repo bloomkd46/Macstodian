@@ -39,29 +39,6 @@ const SHARED_DOMAINS: Record<string, string[]> = {
   'raspberry pi': ['org.raspberrypi.'],
   mozilla: ['org.mozilla.']
 }
-// Observed product/legacy names. These are suggestions, never removal-authorizing aliases.
-// Keep beta/version/channel names explicit: resemblance alone must not swallow another app's data.
-export const RELATED_ALIASES = [
-  { name: 'Audio Hijack 4', ids: ['com.rogueamoeba.audiohijack'] },
-  { name: 'Farrago 2', ids: ['com.rogueamoeba.farrago'] },
-  { name: 'Docker Desktop', ids: ['com.docker.docker'] },
-  { name: 'com.docker.install', ids: ['com.docker.docker'] },
-  { name: 'Codex', ids: ['com.openai.codex'] },
-  { name: 'ChatGPT', ids: ['com.openai.chat', 'com.openai.codex'] },
-  { name: 'ChatGPTHelper', ids: ['com.openai.chat', 'com.openai.codex'] },
-  { name: 'Last.fm', ids: ['fm.last.Scrobbler'] },
-  { name: 'fm.last', ids: ['fm.last.Scrobbler'] },
-  { name: 'fm.last.Last.fm Scrobbler', ids: ['fm.last.Scrobbler'] },
-  { name: 'minecraft', ids: ['com.mojang.minecraftlauncher'] },
-  { name: 'ElectricSheep', ids: ['org.elecricsheep.ElectricSheep.app'] },
-  { name: 'balena-etcher', ids: ['io.balena.etcher'] },
-  { name: 'anker-charging-manager', ids: ['com.anker.120f.chargingmanager'] },
-  { name: 't3code-v2', ids: ['com.t3tools.t3code'] },
-  { name: 'copilot', ids: ['com.github.githubapp'] },
-  { name: 'nanoleaf-updater', ids: ['me.nanoleaf.desktop-app'] },
-  { name: 'org.raspberrypi.Imager', ids: ['org.raspberrypi.imagingutility'] },
-  { name: 'com.4kdownload.4K Video Downloader+', ids: ['com.openmedia.4kvideodownloaderplus'] }
-] as const
 const GENERIC_NAMES = new Set([
   'data',
   'cache',
@@ -80,10 +57,64 @@ const GENERIC_NAMES = new Set([
 ])
 const SYSTEM_NAMES = new Set(['.globalpreferences', 'nsglobaldomain', 'loginwindow', '.ds_store'])
 
-export function matchOwnership(
+// Compare words rather than arbitrary substrings. Camel case and punctuation are
+// common differences between bundle metadata and cross-platform data directories.
+const words = (value: string) =>
+  value
+    .normalize('NFKC')
+    .replace(/([\p{Ll}\d])(\p{Lu})/gu, '$1 $2')
+    .replace(/(\p{Lu})(\p{Lu}\p{Ll})/gu, '$1 $2')
+    .toLowerCase()
+    .match(/[\p{L}\p{N}]+/gu) ?? []
+const compact = (value: string) => words(value).join('')
+const PRODUCT_ROLES = new Set(['app', 'desktop', 'launcher', 'client', 'browser'])
+const usableName = (name: string) =>
+  compact(name).length >= 4 &&
+  !GENERIC_NAMES.has(name.toLowerCase()) &&
+  !['app', 'helper', 'updater', 'client', 'desktop', 'browser', 'editor', 'software'].includes(
+    compact(name)
+  )
+
+export function createOwnershipMatcher(apps: InstalledApp[]) {
+  const metadata = apps
+    .filter((app) => app.bundleId)
+    .map((app) => {
+      const parts = app.bundleId!.toLowerCase().split('.')
+      const names = new Set([
+        app.name,
+        basename(app.path).replace(/\.app$/i, ''),
+        ...(app.ownershipNames ?? [])
+      ])
+      // Product identifiers can retain names omitted from the display name.
+      if (parts.length >= 3 && usableName(parts.at(-1)!)) names.add(parts.at(-1)!)
+      for (const name of [...names]) {
+        const tokens = words(name)
+        if (PRODUCT_ROLES.has(tokens.at(-1) ?? '')) names.add(tokens.slice(0, -1).join(' '))
+      }
+      return {
+        app,
+        names: [...names].filter(usableName),
+        namespace: parts.length >= 3 ? parts.slice(0, 2).join('.') : null,
+        vendor: parts.length >= 3 ? parts[1]! : null
+      }
+    })
+  return (name: string, category: Category) => match(name, category, apps, metadata)
+}
+
+export function matchOwnership(name: string, category: Category, apps: InstalledApp[]) {
+  return createOwnershipMatcher(apps)(name, category)
+}
+
+function match(
   name: string,
   category: Category,
-  apps: InstalledApp[]
+  apps: InstalledApp[],
+  metadata: {
+    app: InstalledApp
+    names: string[]
+    namespace: string | null
+    vendor: string | null
+  }[]
 ): { ownerIds: string[]; confidence: Confidence; reason: string; protected: boolean } {
   const key = name.replace(
     category === 'preferences' ? /\.plist$/i : category === 'savedState' ? /\.savedState$/i : /$^/,
@@ -147,26 +178,6 @@ export function matchOwnership(
       reason: `Exact embedded helper bundle ID: ${key}; found inside ${helpers.map((app) => app.name).join(', ')}. Protected and excluded from app totals.`,
       protected: true
     }
-  const relatedAliases = RELATED_ALIASES.filter(
-    (entry) => entry.name.toLowerCase() === key.toLowerCase()
-  )
-  const named = apps.filter(
-    (app) =>
-      app.bundleId &&
-      ([app.name, basename(app.path).replace(/\.app$/i, ''), ...(app.ownershipNames ?? [])].some(
-        (name) => name.toLowerCase() === key.toLowerCase()
-      ) ||
-        relatedAliases.some((entry) =>
-          entry.ids.some((id) => id.toLowerCase() === app.bundleId?.toLowerCase())
-        ))
-  )
-  if (named.length)
-    return {
-      ownerIds: named.map((app) => app.id),
-      confidence: 'related',
-      reason: `Possible relation by exact name or known product alias (${key}): ${named.map((app) => app.name).join(', ')}. A name does not prove ownership; protected and excluded from app totals.`,
-      protected: true
-    }
   // Require a full installed ID and a separator; never match vendor prefixes or partial tokens.
   // Only suggest the most specific ID when an installed app and its helper overlap.
   const identifiers = apps
@@ -197,6 +208,45 @@ export function matchOwnership(
       protected: true
     }
   }
+  // Exact normalized names outrank prefixes (e.g. stable versus an installed beta).
+  const normalized = compact(key)
+  const exactNames = metadata.filter(({ names }) =>
+    names.some((name) => compact(name) === normalized)
+  )
+  const prefixes = metadata.flatMap(({ app, names }) =>
+    names.flatMap((name) => {
+      const base = compact(name)
+      if (!normalized.startsWith(base)) return []
+      const keyWords = words(key)
+      // Require an actual word boundary; "Code" must not match "Codec".
+      const boundary = keyWords.some((_, index) => keyWords.slice(0, index + 1).join('') === base)
+      return boundary ? [{ app, length: base.length }] : []
+    })
+  )
+  const longest = Math.max(0, ...prefixes.map(({ length }) => length))
+  const named = exactNames.length
+    ? exactNames.map(({ app }) => app)
+    : [...new Set(prefixes.filter(({ length }) => length === longest).map(({ app }) => app))]
+  if (named.length)
+    return {
+      ownerIds: named.map((app) => app.id),
+      confidence: 'related',
+      reason: `Possible relation by ${exactNames.length ? 'normalized product name' : 'app name followed by a word or version suffix'} (${key}): ${named.map((app) => app.name).join(', ')}. Inferred from installed bundle metadata; protected and excluded from app totals.`,
+      protected: true
+    }
+  // Discover vendor folders from installed reverse-domain IDs, without assigning
+  // a vendor's other products exclusively to the one app that happens to be installed.
+  const vendors = metadata.filter(
+    ({ vendor, namespace }) =>
+      vendor && namespace && (normalized === compact(vendor) || key.toLowerCase() === namespace)
+  )
+  if (vendors.length)
+    return {
+      ownerIds: vendors.map(({ app }) => app.id),
+      confidence: 'shared',
+      reason: `Vendor name or namespace inferred from installed bundle IDs (${key}); may serve multiple products. Counted once and protected.`,
+      protected: true
+    }
   if (key.toLowerCase().startsWith('com.apple.'))
     return {
       ownerIds: [],
@@ -208,7 +258,8 @@ export function matchOwnership(
   return {
     ownerIds: [],
     confidence: 'unmatched',
-    reason: 'No installed owner or possible relation identified by bundle metadata or known names.',
+    reason:
+      'No installed owner or possible relation identified by installed bundle IDs or adaptive product-name rules.',
     protected: false
   }
 }
