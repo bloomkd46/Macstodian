@@ -1,0 +1,138 @@
+import { app, BrowserWindow, ipcMain, nativeTheme, shell } from 'electron'
+import { join } from 'node:path'
+import { defaultConfig, scan } from './scanner'
+import { macPlatform } from './platform'
+import { RemovalService } from './removal'
+import type { ReviewRequest } from '../shared/api'
+
+let window: BrowserWindow | null = null
+let scanning = false,
+  removing = false,
+  reviewing = false
+const config = defaultConfig()
+const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#141a17' : '#f8faf8')
+const removal = new RemovalService(config, macPlatform, async (path) => {
+  if (!app.isPackaged && process.env.MACSTODIAN_VERIFY_READ_ONLY === '1')
+    throw new Error('Trash is disabled during read-only verification.')
+  await shell.trashItem(path)
+})
+
+function registerIPC() {
+  const handle = (channel: string, action: (payload: unknown) => unknown) =>
+    ipcMain.handle(channel, (event, payload: unknown) => {
+      if (
+        !window ||
+        event.sender !== window.webContents ||
+        event.senderFrame !== window.webContents.mainFrame
+      )
+        throw new Error('Untrusted IPC sender.')
+      return action(payload)
+    })
+  handle('storage:scan', async () => {
+    if (process.platform !== 'darwin') throw new Error('Macstodian scans macOS only.')
+    if (scanning || removing || reviewing)
+      throw new Error('A scan, review, or removal is already in progress.')
+    scanning = true
+    removal.setSnapshot(null)
+    try {
+      const result = await scan(config, macPlatform, (progress) =>
+        window?.webContents.send('storage:progress', progress)
+      )
+      removal.setSnapshot(result)
+      return result.view
+    } finally {
+      scanning = false
+    }
+  })
+  handle('storage:review', async (payload) => {
+    if (scanning || removing || reviewing)
+      throw new Error('Wait for the current operation to finish.')
+    reviewing = true
+    try {
+      return await removal.review(payload as ReviewRequest)
+    } finally {
+      reviewing = false
+    }
+  })
+  handle('storage:confirm', async (payload) => {
+    if (typeof payload !== 'string' || scanning || removing || reviewing)
+      throw new Error('Invalid removal request or operation in progress.')
+    removing = true
+    try {
+      return await removal.confirm(payload)
+    } finally {
+      removing = false
+    }
+  })
+  handle('storage:reveal', async (payload) => {
+    if (
+      !payload ||
+      typeof payload !== 'object' ||
+      !('scanId' in payload) ||
+      !('itemId' in payload) ||
+      typeof payload.scanId !== 'string' ||
+      typeof payload.itemId !== 'string'
+    )
+      throw new Error('Invalid reveal request.')
+    const path = await removal.reveal(payload.scanId, payload.itemId)
+    shell.showItemInFolder(path)
+  })
+}
+
+function createWindow() {
+  window = new BrowserWindow({
+    width: 1380,
+    height: 900,
+    minWidth: 1080,
+    minHeight: 700,
+    title: 'Macstodian',
+    backgroundColor: windowBackground(),
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 22, y: 22 },
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  })
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  window.webContents.on('will-attach-webview', (event) => event.preventDefault())
+  window.webContents.on('will-navigate', (event) => event.preventDefault())
+  window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) =>
+    callback(false)
+  )
+  window.webContents.session.setPermissionCheckHandler(() => false)
+  const devOrigin =
+    !app.isPackaged && process.env.ELECTRON_RENDERER_URL
+      ? new URL(process.env.ELECTRON_RENDERER_URL).origin
+      : null
+  window.webContents.session.webRequest.onBeforeRequest((details, callback) => {
+    const url = new URL(details.url)
+    const local = url.protocol === 'file:' || url.protocol === 'devtools:'
+    const dev =
+      !!devOrigin &&
+      (url.origin === devOrigin || (url.protocol === 'ws:' && `http://${url.host}` === devOrigin))
+    callback({ cancel: !local && !dev })
+  })
+  if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL)
+    void window.loadURL(process.env.ELECTRON_RENDERER_URL)
+  else void window.loadFile(join(__dirname, '../renderer/index.html'))
+  window.on('closed', () => {
+    window = null
+  })
+}
+
+app.whenReady().then(() => {
+  app.setName('Macstodian')
+  nativeTheme.themeSource = 'system'
+  nativeTheme.on('updated', () => window?.setBackgroundColor(windowBackground()))
+  registerIPC()
+  createWindow()
+  app.on('activate', () => {
+    if (!window) createWindow()
+  })
+})
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit()
+})
