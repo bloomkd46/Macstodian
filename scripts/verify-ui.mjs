@@ -27,12 +27,12 @@ const items = [
   item('bundle', 'bundle', '/fixture/Applications/Alpha.app', 100, ['alpha']),
   item('cache', 'cache', '/fixture/Library/Caches/dev.alpha', 25, ['alpha']),
   item('data', 'support', '/fixture/Library/Application Support/dev.alpha', 50, ['alpha']),
-  item('running-bundle', 'bundle', '/fixture/Applications/Running.app', 10, ['running']),
+  item('running-bundle', 'bundle', '/fixture/Applications/Running.app', 200, ['running']),
   item('orphan', 'support', '/fixture/Library/Application Support/orphan', 45),
   {
     ...item('related', 'support', '/fixture/Library/Application Support/Alpha', 90, ['alpha']),
     confidence: 'related',
-    reason: 'Possible relation by exact product name; protected and excluded from app totals.'
+    reason: 'Possible relation by exact product name; protected from removal.'
   },
   {
     ...item(
@@ -66,7 +66,7 @@ const app = (id, name, bundleItemId, path, appBytes, dataItemIds = [], dataBytes
 })
 const apps = [
   app('alpha', 'Alpha', 'bundle', '/fixture/Applications/Alpha.app', 100, ['cache', 'data'], 75),
-  app('running', 'Running App', 'running-bundle', '/fixture/Applications/Running.app', 10)
+  app('running', 'Running App', 'running-bundle', '/fixture/Applications/Running.app', 200)
 ]
 const main = join(temporary, 'main.cjs')
 await writeFile(
@@ -133,6 +133,11 @@ try {
   await expect(page.locator('.stats > div').nth(2).locator('strong')).toHaveText('170 B')
   await expect(page.locator('.stats > div')).toHaveCount(4)
   await expect(page.locator('.stats > div').nth(3).locator('strong')).toHaveText('45 B')
+  const alphaRow = page.locator('.apps-table tbody > tr').first()
+  await expect(alphaRow.locator('td').nth(2)).toContainText('165 B')
+  await expect(alphaRow.locator('td').nth(2)).toContainText('1 possible related path · 90 B')
+  await expect(alphaRow.locator('td').nth(3)).toContainText('265 B')
+  await expect(alphaRow.locator('td').nth(3)).toContainText('175 B without possible related')
   await checkAppearance('dark', 'apps', ['.stats', '.table-wrap'])
   await checkAppearance('light', 'apps', ['.stats', '.table-wrap'])
   await checkAppearance('dark', 'apps', ['.stats', '.table-wrap'])
@@ -204,6 +209,16 @@ try {
   await expect(page.locator('.stats > div').nth(3).locator('small')).toContainText('3,001 paths')
   await expect(page.locator('.shared .path-item')).toHaveCount(0)
   await expect(page.locator('.skipped-list')).toHaveCount(0)
+  const selectableFilter = page.getByRole('button', { name: 'Selectable only' })
+  await selectableFilter.click()
+  await expect(selectableFilter).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('article.leftover')).toHaveCount(3000)
+  await expect(page.locator('article.leftover input:disabled')).toHaveCount(0)
+  await expect(page.locator('.shared')).toHaveCount(0)
+  await expect(page.locator('.stats > div').nth(3).locator('strong')).toHaveText(leftoverTotal)
+  await selectableFilter.click()
+  await expect(selectableFilter).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.locator('article.leftover')).toHaveCount(3001)
   const disabled = page.locator('input[type="checkbox"]:disabled')
   await expect(disabled).toHaveCount(1)
   for (const theme of ['light', 'dark']) {
@@ -246,6 +261,10 @@ try {
   })
   expect(Math.max(...selectionPaintMs)).toBeLessThan(250)
   await expect(page.locator('.selection-bar')).toContainText('6 selected')
+  await selectableFilter.click()
+  await expect(page.locator('article.leftover')).toHaveCount(3000)
+  await expect(page.locator('.selection-bar')).toContainText('6 selected')
+  await selectableFilter.click()
   // Search must preserve selections and closed sections must reveal their data on demand.
   await page.getByRole('textbox', { name: 'Search leftovers' }).fill('stress-0')
   await expect(page.locator('article.leftover')).toHaveCount(1)
@@ -262,7 +281,7 @@ try {
     passed: [
       'app bundle selected; all data unchecked by default',
       'possible related paths visible in app details and excluded from removal review',
-      'possible associations excluded from leftovers and counted once outside app totals',
+      'possible associations excluded from leftovers and counted once in the scan summary',
       'separate cache and settings choices',
       'review lists all selected paths before confirmation',
       'renderer submits IDs only',

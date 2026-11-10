@@ -340,6 +340,22 @@ h2 {
   font-size: 11px;
   margin: 8px 0 0;
 }
+.toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.filter-toggle {
+  font-size: 11px;
+  padding: 9px 11px;
+  color: var(--text-muted);
+}
+.filter-toggle.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+}
 .search {
   display: flex;
   gap: 8px;

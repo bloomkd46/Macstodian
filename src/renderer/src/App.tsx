@@ -65,6 +65,7 @@ export function App() {
   const modalRef = useRef<HTMLElement>(null)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
+  const [selectableOnly, setSelectableOnly] = useState(false)
   const [sort, setSort] = useState<{ key: SortKey; ascending: boolean }>({
     key: 'totalBytes',
     ascending: false
@@ -76,6 +77,16 @@ export function App() {
   const [plan, setPlan] = useState<RemovalPlan | null>(null)
   const [results, setResults] = useState<RemovalResult[] | null>(null)
   const items = useMemo(() => new Map(snapshot?.items.map((item) => [item.id, item])), [snapshot])
+  const relatedBytes = useMemo(
+    () =>
+      new Map(
+        (snapshot?.apps ?? []).map((app) => [
+          app.id,
+          app.relatedItemIds.reduce((total, id) => total + (items.get(id)?.bytes ?? 0), 0)
+        ])
+      ),
+    [snapshot, items]
+  )
   const { shared, related, leftovers } = useMemo(() => {
     const shared: ScanItem[] = [],
       related: ScanItem[] = [],
@@ -104,8 +115,14 @@ export function App() {
           `${app.name} ${app.bundleId} ${app.path}`.toLowerCase().includes(query.toLowerCase())
         )
         .sort((a, b) => {
-          const av = a[sort.key],
-            bv = b[sort.key]
+          const av =
+              sort.key === 'dataBytes' || sort.key === 'totalBytes'
+                ? a[sort.key] + (relatedBytes.get(a.id) ?? 0)
+                : a[sort.key],
+            bv =
+              sort.key === 'dataBytes' || sort.key === 'totalBytes'
+                ? b[sort.key] + (relatedBytes.get(b.id) ?? 0)
+                : b[sort.key]
           if (av === null) return bv === null ? a.name.localeCompare(b.name) : 1
           if (bv === null) return -1
           return (
@@ -114,14 +131,16 @@ export function App() {
               : Number(av) - Number(bv)) * (sort.ascending ? 1 : -1) || a.name.localeCompare(b.name)
           )
         }),
-    [snapshot, query, sort]
+    [snapshot, query, sort, relatedBytes]
   )
   const visibleLeftovers = useMemo(
     () =>
-      leftovers.filter((item) =>
-        `${item.name} ${item.path}`.toLowerCase().includes(query.toLowerCase())
+      leftovers.filter(
+        (item) =>
+          (!selectableOnly || removable(item)) &&
+          `${item.name} ${item.path}`.toLowerCase().includes(query.toLowerCase())
       ),
-    [leftovers, query]
+    [leftovers, query, selectableOnly]
   )
   const toggleSelected = useCallback(
     (id: string) => setSelected((values) => toggle(values, id)),
@@ -287,7 +306,7 @@ export function App() {
               </h1>
               <p>
                 {tab === 'apps'
-                  ? 'Your applications and the data we can confidently match to them.'
+                  ? 'Your applications, confirmed data, and possible related data.'
                   : 'Possible leftovers in your user Library. A clue to review, never a verdict.'}
               </p>
             </div>
@@ -378,7 +397,7 @@ export function App() {
               <div>
                 <span>MATCHED APP DATA</span>
                 <strong>{formatBytes(totals.data)}</strong>
-                <small>Outside bundles · shared and possible related data excluded</small>
+                <small>Confirmed data only · possible related data shown in app rows</small>
               </div>
               <div>
                 <span>SHARED & POSSIBLE RELATED DATA</span>
@@ -426,15 +445,26 @@ export function App() {
                   </p>
                 )}
               </div>
-              <label className="search">
-                <Search size={15} />
-                <input
-                  aria-label={tab === 'apps' ? 'Search apps' : 'Search leftovers'}
-                  placeholder={tab === 'apps' ? 'Search applications' : 'Search names or paths'}
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                />
-              </label>
+              <div className="toolbar-controls">
+                {tab === 'leftovers' && (
+                  <button
+                    className={`filter-toggle${selectableOnly ? ' active' : ''}`}
+                    aria-pressed={selectableOnly}
+                    onClick={() => setSelectableOnly((value) => !value)}
+                  >
+                    Selectable only
+                  </button>
+                )}
+                <label className="search">
+                  <Search size={15} />
+                  <input
+                    aria-label={tab === 'apps' ? 'Search apps' : 'Search leftovers'}
+                    placeholder={tab === 'apps' ? 'Search applications' : 'Search names or paths'}
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                  />
+                </label>
+              </div>
             </div>
             {tab === 'apps' ? (
               <div className="table-wrap">
@@ -454,13 +484,14 @@ export function App() {
                         setSort={setSort}
                         label="Data size"
                         field="dataBytes"
-                        title="Confidently matched data outside the app bundle. Shared data is counted separately."
+                        title="Confirmed data plus possible related paths outside the app bundle. The possible portion is shown below each value; shared data is counted separately."
                       />
                       <SortHeader
                         sort={sort}
                         setSort={setSort}
                         label="Total size"
                         field="totalBytes"
+                        title="App bundle plus confirmed and possible related data. The confirmed total is shown below each value."
                       />
                       <SortHeader
                         sort={sort}
@@ -489,6 +520,7 @@ export function App() {
                         open={expanded.has(app.id)}
                         busy={!!busy}
                         items={items}
+                        relatedBytes={relatedBytes.get(app.id) ?? 0}
                         onToggle={toggleExpanded}
                         onReview={openAppReview}
                         onReveal={reveal}
@@ -506,8 +538,8 @@ export function App() {
                   <Info size={17} />
                   <span>
                     Unmatched does not mean unused. Exact bundle IDs identify owners. Possible name
-                    and helper associations appear under app details, protected and excluded from
-                    totals. Generic, shared, and protected data cannot be selected.
+                    and helper associations appear under app details and in displayed app sizes, but
+                    remain protected. Generic, shared, and protected data cannot be selected.
                   </span>
                 </div>
                 <div className="leftover-list">
@@ -522,7 +554,11 @@ export function App() {
                     />
                   ))}
                   {!visibleLeftovers.length && (
-                    <p className="no-results">No possible leftovers match this view.</p>
+                    <p className="no-results">
+                      {selectableOnly
+                        ? 'No selectable leftovers match this view.'
+                        : 'No possible leftovers match this view.'}
+                    </p>
                   )}
                 </div>
                 {selected.size > 0 && (
@@ -546,17 +582,17 @@ export function App() {
                 )}
               </>
             )}
-            {related.length > 0 && (
+            {related.length > 0 && (tab !== 'leftovers' || !selectableOnly) && (
               <PathList
                 key={`${snapshot.id}-related`}
                 title="Possible related app data"
-                caption={`${formatBytes(sum(related))} · protected · counted once outside app totals`}
+                caption={`${formatBytes(sum(related))} · protected · counted once in scan summary`}
                 items={related}
                 busy={!!busy}
                 onReveal={reveal}
               />
             )}
-            {shared.length > 0 && (
+            {shared.length > 0 && (tab !== 'leftovers' || !selectableOnly) && (
               <PathList
                 key={`${snapshot.id}-shared`}
                 title="Shared & system data"
@@ -815,6 +851,7 @@ const AppRows = memo(function AppRows({
   open,
   busy,
   items,
+  relatedBytes,
   onToggle,
   onReview,
   onReveal
@@ -823,6 +860,7 @@ const AppRows = memo(function AppRows({
   open: boolean
   busy: boolean
   items: Map<string, ScanItem>
+  relatedBytes: number
   onToggle: (id: string) => void
   onReview: (app: InstalledApp) => void
   onReveal: (item: ScanItem) => void
@@ -853,15 +891,20 @@ const AppRows = memo(function AppRows({
         </td>
         <td>{formatBytes(app.appBytes)}</td>
         <td>
-          {formatBytes(app.dataBytes)}
+          {formatBytes(app.dataBytes + relatedBytes)}
           {!!app.relatedItemIds?.length && (
             <div className="date">
               {app.relatedItemIds.length} possible related{' '}
-              {app.relatedItemIds.length === 1 ? 'path' : 'paths'}
+              {app.relatedItemIds.length === 1 ? 'path' : 'paths'} · {formatBytes(relatedBytes)}
             </div>
           )}
         </td>
-        <td className="total">{formatBytes(app.totalBytes)}</td>
+        <td className="total">
+          {formatBytes(app.totalBytes + relatedBytes)}
+          {!!app.relatedItemIds?.length && (
+            <div className="date">{formatBytes(app.totalBytes)} without possible related</div>
+          )}
+        </td>
         <td className="date">{date(app.lastOpened)}</td>
         <td className="date" title={changedHelp}>
           {date(app.dataLastChanged)}
@@ -884,7 +927,9 @@ const AppRows = memo(function AppRows({
           <td colSpan={7} className="expanded-content">
             <div className="app-detail-heading">
               <strong>Bundle & every matched path</strong>
-              <span>Shared and possible related paths are protected and excluded from totals.</span>
+              <span>
+                Possible related paths are protected and shown separately in the size estimates.
+              </span>
             </div>
             {[app.bundleItemId, ...app.dataItemIds, ...app.sharedItemIds].map((id) => {
               const item = items.get(id)
@@ -894,7 +939,9 @@ const AppRows = memo(function AppRows({
               <>
                 <div className="app-detail-heading">
                   <strong>Possible related paths</strong>
-                  <span>Ownership unconfirmed · protected · excluded from totals</span>
+                  <span>
+                    Ownership unconfirmed · protected · included in displayed size estimates
+                  </span>
                 </div>
                 {app.relatedItemIds.map((id) => {
                   const item = items.get(id)
