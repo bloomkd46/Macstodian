@@ -30,6 +30,11 @@ const items = [
   item('running-bundle', 'bundle', '/fixture/Applications/Running.app', 10, ['running']),
   item('orphan', 'support', '/fixture/Library/Application Support/orphan', 45),
   {
+    ...item('related', 'support', '/fixture/Library/Application Support/Alpha', 90, ['alpha']),
+    confidence: 'related',
+    reason: 'Possible relation by exact product name; protected and excluded from app totals.'
+  },
+  {
     ...item(
       'shared',
       'support',
@@ -52,6 +57,7 @@ const app = (id, name, bundleItemId, path, appBytes, dataItemIds = [], dataBytes
   totalBytes: appBytes + dataBytes,
   bundleId: `dev.${id}`,
   sharedItemIds: id === 'alpha' ? ['shared'] : [],
+  relatedItemIds: id === 'alpha' ? ['related'] : [],
   lastOpened: null,
   dataLastChanged: dataBytes ? Date.UTC(2025, 0, 2) : null,
   partial: false,
@@ -115,11 +121,23 @@ try {
   await checkAppearance('dark', 'empty', [])
   await page.getByRole('button', { name: 'Scan this Mac', exact: true }).click()
   await expect(page.getByRole('region', { name: 'Scan summary' })).toBeVisible()
+  await expect(page.locator('.stats > div').nth(1).locator('strong')).toHaveText('75 B')
+  await expect(page.locator('.stats > div').nth(2).locator('strong')).toHaveText('170 B')
   await checkAppearance('dark', 'apps', ['.stats', '.table-wrap'])
   await checkAppearance('light', 'apps', ['.stats', '.table-wrap'])
   await checkAppearance('dark', 'apps', ['.stats', '.table-wrap'])
+  await expect(page.getByRole('button', { name: 'Details for Alpha', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Details for Alpha', exact: true }).click()
+  await expect(page.locator('.expanded-content')).toContainText('Possible related paths')
+  await expect(page.locator('.expanded-content')).toContainText(
+    '/fixture/Library/Application Support/Alpha'
+  )
+  await expect(page.locator('.expanded-content')).toContainText('Ownership unconfirmed')
+  await page.getByRole('button', { name: 'Details for Alpha', exact: true }).click()
   await page.getByRole('button', { name: 'Review removal', exact: true }).first().click()
   let dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('checkbox')).toHaveCount(3)
+  await expect(dialog).not.toContainText('/fixture/Library/Application Support/Alpha')
   await expect(dialog.getByRole('checkbox').first()).toBeChecked()
   await expect(dialog.getByRole('checkbox').nth(1)).not.toBeChecked()
   await expect(dialog.getByRole('checkbox').nth(2)).not.toBeChecked()
@@ -169,6 +187,8 @@ try {
   const report = {
     passed: [
       'app bundle selected; all data unchecked by default',
+      'possible related paths visible in app details and excluded from removal review',
+      'possible associations excluded from leftovers and counted once outside app totals',
       'separate cache and settings choices',
       'review lists all selected paths before confirmation',
       'renderer submits IDs only',

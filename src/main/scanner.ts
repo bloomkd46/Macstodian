@@ -53,6 +53,7 @@ export interface Measurement {
   partial: boolean
   skippedSymlinks: number
   fingerprint: string
+  embeddedBundlePaths: string[]
 }
 export const identity = (stat: Stats): Identity => ({
   dev: stat.dev,
@@ -99,6 +100,7 @@ export async function measure(
     partial = false,
     skippedSymlinks = 0
   const hash = createHash('sha256')
+  const embeddedBundlePaths: string[] = []
   const seen = new Set<string>()
   const stack = [
     { path, excludeDate: category === 'cache' || category === 'logs' || category === 'bundle' }
@@ -136,6 +138,14 @@ export async function measure(
         tick()
       } else if (stat.isDirectory()) {
         await assertNoSymlink(entry.path)
+        // Reuse this traversal, never follow links or index framework identifiers as app owners.
+        if (
+          category === 'bundle' &&
+          entry.path !== path &&
+          /\.(app|appex|xpc)$/i.test(entry.path) &&
+          embeddedBundlePaths.length < 256
+        )
+          embeddedBundlePaths.push(entry.path)
         const entries = (await readdir(entry.path)).sort().reverse()
         const after = await lstat(entry.path)
         if (
@@ -166,6 +176,7 @@ export async function measure(
     latestObservedChange,
     partial,
     skippedSymlinks,
+    embeddedBundlePaths,
     fingerprint: hash.digest('hex')
   }
 }
@@ -255,6 +266,13 @@ export async function scan(
         files++
         report('measuring', path)
       })
+      const helperBundleIds = new Set<string>()
+      if (info.bundleId)
+        await mapLimited(measurement.embeddedBundlePaths, async (helper) => {
+          const metadata = await platform.readBundleInfo(helper)
+          if (metadata.bundleId && metadata.bundleId !== info.bundleId)
+            helperBundleIds.add(metadata.bundleId)
+        })
       if (!sameIdentity(identity(stat), identity(await assertNoSymlink(path))))
         throw new Error('Bundle changed during scan; rescan required.')
       const appId = randomUUID(),
@@ -287,6 +305,15 @@ export async function scan(
         bundleItemId,
         dataItemIds: [],
         sharedItemIds: [],
+        relatedItemIds: [],
+        ownershipNames: [
+          ...new Set(
+            [...(info.names ?? []), info.name, basename(path, '.app')].filter(
+              (value): value is string => !!value
+            )
+          )
+        ],
+        helperBundleIds: [...helperBundleIds].sort(),
         appBytes: item.bytes,
         dataBytes: 0,
         totalBytes: item.bytes,
@@ -379,6 +406,10 @@ export async function scan(
       if (item.category === 'bundle' || !item.ownerIds.includes(app.id)) continue
       if (item.confidence === 'shared') {
         app.sharedItemIds.push(item.id)
+        continue
+      }
+      if (item.confidence === 'related') {
+        app.relatedItemIds.push(item.id)
         continue
       }
       app.dataItemIds.push(item.id)

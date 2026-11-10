@@ -54,7 +54,7 @@ const errorMessage = (error: unknown) =>
     ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '')
     : String(error)
 const removable = (item: ScanItem) =>
-  !item.protected && !item.partial && item.confidence !== 'shared'
+  !item.protected && !item.partial && !['shared', 'related'].includes(item.confidence)
 
 export function App() {
   const [tab, setTab] = useState<'apps' | 'leftovers'>('apps')
@@ -77,6 +77,7 @@ export function App() {
   const [results, setResults] = useState<RemovalResult[] | null>(null)
   const items = useMemo(() => new Map(snapshot?.items.map((item) => [item.id, item])), [snapshot])
   const shared = snapshot?.items.filter((item) => item.confidence === 'shared') ?? []
+  const related = snapshot?.items.filter((item) => item.confidence === 'related') ?? []
   const leftovers = (
     snapshot?.items.filter(
       (item) => item.category !== 'bundle' && !item.ownerIds.length && item.confidence !== 'shared'
@@ -398,12 +399,14 @@ export function App() {
                 <strong>
                   {formatBytes(snapshot.apps.reduce((total, app) => total + app.dataBytes, 0))}
                 </strong>
-                <small>Outside bundles · shared data excluded</small>
+                <small>Outside bundles · shared and possible related data excluded</small>
               </div>
               <div>
-                <span>SHARED DATA · COUNTED ONCE</span>
-                <strong>{formatBytes(sum(shared))}</strong>
-                <small>{shared.length} protected items · separate from app totals</small>
+                <span>SHARED & POSSIBLE RELATED DATA</span>
+                <strong>{formatBytes(sum([...shared, ...related]))}</strong>
+                <small>
+                  {shared.length} shared · {related.length} possible related · protected
+                </small>
               </div>
             </section>
             <div className="scan-note">
@@ -510,9 +513,9 @@ export function App() {
                 <div className="notice subtle">
                   <Info size={17} />
                   <span>
-                    Unmatched does not mean unused. Exact bundle IDs and a small audited alias list
-                    determine ownership. Generic names are uncertain; shared and protected data
-                    cannot be selected.
+                    Unmatched does not mean unused. Bundle IDs and audited aliases identify owners.
+                    Possible name and helper associations appear under app details, protected and
+                    excluded from totals. Generic, shared, and protected data cannot be selected.
                   </span>
                 </div>
                 <div className="leftover-list">
@@ -583,6 +586,19 @@ export function App() {
                   </div>
                 )}
               </>
+            )}
+            {related.length > 0 && (
+              <details className="shared">
+                <summary>
+                  Possible related app data{' '}
+                  <span>
+                    {formatBytes(sum(related))} · protected · counted once outside app totals
+                  </span>
+                </summary>
+                {related.map((item) => (
+                  <PathItem item={item} key={item.id} />
+                ))}
+              </details>
             )}
             {shared.length > 0 && (
               <details className="shared">
@@ -780,7 +796,15 @@ export function App() {
             </button>
           </td>
           <td>{formatBytes(app.appBytes)}</td>
-          <td>{formatBytes(app.dataBytes)}</td>
+          <td>
+            {formatBytes(app.dataBytes)}
+            {!!app.relatedItemIds?.length && (
+              <div className="date">
+                {app.relatedItemIds.length} possible related{' '}
+                {app.relatedItemIds.length === 1 ? 'path' : 'paths'}
+              </div>
+            )}
+          </td>
           <td className="total">{formatBytes(app.totalBytes)}</td>
           <td className="date">{date(app.lastOpened)}</td>
           <td className="date" title={changedHelp}>
@@ -808,12 +832,26 @@ export function App() {
             <td colSpan={7} className="expanded-content">
               <div className="app-detail-heading">
                 <strong>Bundle & every matched path</strong>
-                <span>Shared paths are excluded from this app’s total.</span>
+                <span>
+                  Shared and possible related paths are protected and excluded from totals.
+                </span>
               </div>
               {[app.bundleItemId, ...app.dataItemIds, ...app.sharedItemIds].map((id) => {
                 const item = items.get(id)
                 return item && <PathItem key={id} item={item} />
               })}
+              {!!app.relatedItemIds?.length && (
+                <>
+                  <div className="app-detail-heading">
+                    <strong>Possible related paths</strong>
+                    <span>Ownership unconfirmed · protected · excluded from totals</span>
+                  </div>
+                  {app.relatedItemIds.map((id) => {
+                    const item = items.get(id)
+                    return item && <PathItem key={id} item={item} />
+                  })}
+                </>
+              )}
               {app.uninstaller && <p className="vendor-note">{app.uninstaller}</p>}
             </td>
           </tr>

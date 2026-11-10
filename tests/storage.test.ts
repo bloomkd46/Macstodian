@@ -95,7 +95,7 @@ describe('scanner and conservative ownership', () => {
     expect(result.view.apps.map((app) => app.name).sort()).toEqual(['Acme', 'Built in', 'Nested'])
     expect(result.view.apps.find((app) => app.name === 'Built in')?.protected).toBe(true)
   })
-  it('matches only exact bundle IDs / audited aliases; ambiguous and generic names stay uncertain', async () => {
+  it('reserves confirmed ownership for exact IDs / audited aliases and protects name suggestions', async () => {
     await bundle('Acme')
     await bundle('Visual Studio Code', 'com.microsoft.VSCode')
     const { view } = await scan(config, platform)
@@ -103,13 +103,20 @@ describe('scanner and conservative ownership', () => {
       'exact'
     )
     expect(matchOwnership('Code', 'support', view.apps).confidence).toBe('alias')
-    expect(matchOwnership('Acme', 'support', view.apps).confidence).toBe('uncertain')
+    expect(matchOwnership('Acme', 'support', view.apps)).toMatchObject({
+      confidence: 'related',
+      protected: true,
+      ownerIds: [view.apps.find((app) => app.name === 'Acme')!.id]
+    })
     expect(matchOwnership('data', 'support', view.apps)).toMatchObject({
       confidence: 'uncertain',
       protected: true,
       ownerIds: []
     })
-    expect(matchOwnership('dev.acme.Editor.extra', 'cache', view.apps).confidence).toBe('unmatched')
+    expect(matchOwnership('dev.acme.Editor.extra', 'cache', view.apps)).toMatchObject({
+      confidence: 'related',
+      protected: true
+    })
     expect(matchOwnership('com.apple.finder.plist', 'preferences', view.apps)).toMatchObject({
       protected: true,
       confidence: 'uncertain'
@@ -117,6 +124,140 @@ describe('scanner and conservative ownership', () => {
     expect(matchOwnership('.GlobalPreferences.plist', 'preferences', view.apps)).toMatchObject({
       protected: true,
       confidence: 'uncertain'
+    })
+  })
+  it('uses both metadata names and the bundle filename, without fuzzy or beta/version matching', async () => {
+    const path = await bundle('BambuStudio', 'com.bambulab.bambu-studio')
+    await file(
+      join(path, 'Contents/fixture.json'),
+      JSON.stringify({
+        bundleId: 'com.bambulab.bambu-studio',
+        name: 'Bambu Studio',
+        names: ['Bambu Studio', 'Bambu']
+      })
+    )
+    await data('BambuStudio')
+    await data('Bambu Studio')
+    await data('Bambu')
+    await data('BambuStudioBeta')
+    const { view } = await scan(config, platform),
+      app = view.apps[0]!
+    expect(app.relatedItemIds).toHaveLength(3)
+    expect(app.dataItemIds).toEqual([])
+    expect(app.dataBytes).toBe(0)
+    expect(app.totalBytes).toBe(app.appBytes)
+    expect(app.dataLastChanged).toBeNull()
+    expect(view.items.find((item) => item.name === 'BambuStudioBeta')).toMatchObject({
+      ownerIds: [],
+      confidence: 'unmatched'
+    })
+  })
+  it('keeps duplicate names as multiple protected suggestions and unreadable identities unassociated', async () => {
+    await bundle('One', 'dev.one')
+    await bundle('Two', 'dev.two')
+    await file(join(config.appRoots[0]!, 'Broken.app/file'))
+    const { view } = await scan(config, platform)
+    for (const app of view.apps.filter((app) => app.bundleId)) app.ownershipNames = ['Same Name']
+    expect(matchOwnership('Same Name', 'logs', view.apps)).toMatchObject({
+      confidence: 'related',
+      protected: true,
+      ownerIds: expect.arrayContaining(view.apps.filter((app) => app.bundleId).map((app) => app.id))
+    })
+    expect(matchOwnership('Broken', 'support', view.apps).ownerIds).toEqual([])
+    for (const name of ['data', 'electron', 'CEF']) {
+      view.apps[0]!.ownershipNames = [name]
+      expect(matchOwnership(name, 'support', view.apps)).toMatchObject({
+        ownerIds: [],
+        confidence: 'uncertain',
+        protected: true
+      })
+    }
+  })
+  it('suggests only complete identifier boundaries and the most specific installed owner', async () => {
+    await bundle()
+    await bundle('Helper', 'dev.acme.Editor.helper')
+    const { view } = await scan(config, platform)
+    const helper = view.apps.find((app) => app.name === 'Helper')!
+    for (const name of ['dev.acme.Editor.ShipIt', 'dev.acme.Editor.extra'])
+      expect(matchOwnership(name, 'cache', view.apps)).toMatchObject({
+        confidence: 'related',
+        protected: true
+      })
+    expect(
+      matchOwnership('dev.acme.Editor.helper.settings.plist', 'preferences', view.apps).ownerIds
+    ).toEqual([helper.id])
+    expect(
+      matchOwnership('dev.acme.Editor_stats.sqlite3-wal', 'preferences', view.apps).confidence
+    ).toBe('related')
+    for (const name of [
+      'dev.acme.EditorBeta',
+      'dev.acme.Edit',
+      'dev.acme.Other',
+      'not-dev.acme.Editor',
+      'dev.acme.Editor_stats.txt'
+    ])
+      expect(matchOwnership(name, 'preferences', view.apps).ownerIds).toEqual([])
+    expect(matchOwnership('dev.acme.Editor.plist', 'preferences', view.apps).confidence).toBe(
+      'exact'
+    )
+  })
+  it('indexes embedded app/XPC/extension IDs, shares duplicate helpers, and skips linked metadata trees', async () => {
+    const first = await bundle(),
+      second = await bundle('Other', 'dev.other')
+    for (const [path, suffix, id] of [
+      [first, 'Contents/Helpers/Worker.app', 'dev.worker'],
+      [first, 'Contents/XPCServices/Service.xpc', 'dev.service'],
+      [first, 'Contents/PlugIns/Extension.appex', 'dev.extension'],
+      [second, 'Contents/Helpers/Worker.app', 'dev.worker']
+    ])
+      await file(
+        join(path!, suffix!, 'Contents/fixture.json'),
+        JSON.stringify({ bundleId: id, name: id })
+      )
+    const external = join(root, 'Outside.app')
+    await file(join(external, 'Contents/fixture.json'), JSON.stringify({ bundleId: 'dev.linked' }))
+    await symlink(external, join(first, 'Contents/Helpers/Linked.app'))
+    for (const name of ['dev.worker', 'dev.service', 'dev.extension', 'dev.linked'])
+      await data(name)
+    const { view } = await scan(config, platform)
+    expect(view.apps).toHaveLength(2)
+    expect(view.items.find((item) => item.name === 'dev.worker')).toMatchObject({
+      confidence: 'shared',
+      protected: true,
+      ownerIds: expect.any(Array)
+    })
+    expect(view.items.find((item) => item.name === 'dev.worker')!.ownerIds).toHaveLength(2)
+    expect(view.items.find((item) => item.name === 'dev.service')).toMatchObject({
+      confidence: 'related',
+      protected: true
+    })
+    expect(view.items.find((item) => item.name === 'dev.extension')).toMatchObject({
+      confidence: 'related',
+      protected: true
+    })
+    expect(view.items.find((item) => item.name === 'dev.linked')!.ownerIds).toEqual([])
+    expect(view.apps.every((app) => app.dataBytes === 0)).toBe(true)
+  })
+  it('associates observed product names conservatively and treats vendor folders as shared', async () => {
+    await bundle('Docker', 'com.docker.docker')
+    await bundle('Brave Browser', 'com.brave.Browser')
+    await data('Docker Desktop')
+    await data('BraveSoftware')
+    const { view } = await scan(config, platform)
+    expect(view.items.find((item) => item.name === 'Docker Desktop')).toMatchObject({
+      confidence: 'related',
+      protected: true
+    })
+    expect(view.items.find((item) => item.name === 'BraveSoftware')).toMatchObject({
+      confidence: 'shared',
+      protected: true
+    })
+    expect(view.apps.every((app) => app.totalBytes === app.appBytes)).toBe(true)
+    expect(matchOwnership('Docker Desktop', 'support', []).ownerIds).toEqual([])
+    expect(matchOwnership('BraveSoftware', 'support', [])).toMatchObject({
+      confidence: 'shared',
+      protected: true,
+      ownerIds: []
     })
   })
   it('counts a shared vendor directory once, outside all individual app totals', async () => {
@@ -213,6 +354,20 @@ describe('scanner and conservative ownership', () => {
 })
 
 describe('macOS metadata and running checks', () => {
+  it('retains both bundle names for ownership suggestions', async () => {
+    const mac = createMacPlatform(async () => ({
+      stdout: JSON.stringify({
+        CFBundleIdentifier: 'dev.example',
+        CFBundleDisplayName: 'Example Display',
+        CFBundleName: 'Example'
+      })
+    }))
+    expect(await mac.readBundleInfo('/Applications/Example.app')).toEqual({
+      bundleId: 'dev.example',
+      name: 'Example Display',
+      names: ['Example Display', 'Example']
+    })
+  })
   it('uses the exact mdls last-used field and handles null, unreadable, and invalid metadata as Unknown', async () => {
     const run = vi.fn(async () => ({ stdout: '(null)' }))
     const mac = createMacPlatform(run)
@@ -261,6 +416,23 @@ describe('macOS metadata and running checks', () => {
 })
 
 describe('removal review, confirmation and revalidation', () => {
+  it('rejects related paths in app and leftover reviews, even if a protected flag is lost', async () => {
+    await bundle()
+    await data('Acme')
+    const snapshot = await scan(config, platform),
+      app = snapshot.view.apps[0]!
+    const related = snapshot.view.items.find((item) => item.name === 'Acme')!
+    expect(app.relatedItemIds).toEqual([related.id])
+    related.protected = false
+    const trash = vi.fn(),
+      service = new RemovalService(config, platform, trash)
+    service.setSnapshot(snapshot)
+    for (const appId of [undefined, app.id])
+      await expect(
+        service.review({ scanId: snapshot.view.id, itemIds: [related.id], appId })
+      ).rejects.toThrow('Protected')
+    expect(trash).not.toHaveBeenCalled()
+  })
   async function setup() {
     const appPath = await bundle()
     await data()

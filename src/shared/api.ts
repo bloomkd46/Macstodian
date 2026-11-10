@@ -1,5 +1,5 @@
 export type Category = 'bundle' | 'support' | 'cache' | 'preferences' | 'logs' | 'savedState'
-export type Confidence = 'exact' | 'alias' | 'uncertain' | 'unmatched' | 'shared'
+export type Confidence = 'exact' | 'alias' | 'related' | 'uncertain' | 'unmatched' | 'shared'
 
 export interface ScanItem {
   id: string
@@ -23,6 +23,9 @@ export interface InstalledApp {
   bundleItemId: string
   dataItemIds: string[]
   sharedItemIds: string[]
+  relatedItemIds: string[]
+  ownershipNames?: string[]
+  helperBundleIds?: string[]
   appBytes: number
   dataBytes: number
   totalBytes: number

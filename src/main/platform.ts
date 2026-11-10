@@ -6,6 +6,7 @@ const exec = promisify(execFile)
 export interface BundleInfo {
   bundleId: string | null
   name: string | null
+  names?: string[]
 }
 export interface Platform {
   readBundleInfo(path: string): Promise<BundleInfo>
@@ -45,7 +46,14 @@ export function createMacPlatform(run: CommandRunner = exec): Platform {
           typeof info[key] === 'string' && info[key] ? String(info[key]) : null
         return {
           bundleId: str('CFBundleIdentifier'),
-          name: str('CFBundleDisplayName') ?? str('CFBundleName')
+          name: str('CFBundleDisplayName') ?? str('CFBundleName'),
+          names: [
+            ...new Set(
+              [str('CFBundleDisplayName'), str('CFBundleName')].filter(
+                (value): value is string => value !== null
+              )
+            )
+          ]
         }
       } catch {
         // An unreadable bundle stays visible, but can never own data or be removed.
