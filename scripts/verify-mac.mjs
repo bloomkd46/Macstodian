@@ -127,6 +127,21 @@ try {
     await search.fill('')
     skywardRecognized = true
   }
+  // Docker supplies several uniquely matched, complete paths on this test Mac.
+  // The fixture test covers this behavior when Docker is not installed.
+  await search.fill('Docker')
+  const dockerRow = page.locator('.apps-table tbody > tr').filter({
+    has: page.getByRole('button', { name: 'Details for Docker', exact: true })
+  })
+  if (await dockerRow.count()) {
+    await dockerRow.getByRole('button', { name: 'Review removal' }).click()
+    const possible = page.getByRole('dialog').locator('.possible-choice input:enabled')
+    expect(await possible.count()).toBeGreaterThan(0)
+    await expect(possible.first()).not.toBeChecked()
+    await page.screenshot({ path: join(output, 'possible-app-review.png') })
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
+  }
+  await search.fill('')
   let reviewed = false
   const reviews = page.getByRole('button', { name: 'Review removal', exact: true })
   const reviewCount = await reviews.count()
@@ -222,6 +237,7 @@ try {
       'expanded matched paths',
       'search / empty results',
       'iOS-style Skyward wrapper identified when installed',
+      'uniquely related app paths appear unchecked in the review when present',
       'leftovers largest first',
       'leftover age sorting in both directions',
       'same-name leftovers grouped with inspectable paths',

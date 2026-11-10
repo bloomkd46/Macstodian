@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { dirname, resolve } from 'node:path'
-import type { InstalledApp, RemovalPlan, RemovalResult, ReviewRequest } from '../shared/api'
+import {
+  reviewableRelatedPath,
+  type InstalledApp,
+  type RemovalPlan,
+  type RemovalResult,
+  type ReviewRequest
+} from '../shared/api'
 import type { Platform } from './platform'
 import {
   assertNoSymlink,
@@ -48,12 +54,13 @@ export class RemovalService {
   }
   private allowed(record: InternalItem, app?: InstalledApp): void {
     const item = record.view,
-      path = resolve(item.path)
+      path = resolve(item.path),
+      relatedForApp = !!app && reviewableRelatedPath(item, app)
     if (
       path !== item.path ||
-      item.protected ||
+      (item.protected && !relatedForApp) ||
       item.confidence === 'shared' ||
-      item.confidence === 'related' ||
+      (item.confidence === 'related' && !relatedForApp) ||
       item.ownerIds.length > 1
     )
       throw new Error(`Protected or shared item cannot be removed: ${item.path}`)
@@ -76,7 +83,10 @@ export class RemovalService {
     )
       throw new Error('Data path is outside the scan scope.')
     if (app) {
-      if (app.protected || (item.category !== 'bundle' && !app.dataItemIds.includes(item.id)))
+      if (
+        app.protected ||
+        (item.category !== 'bundle' && !app.dataItemIds.includes(item.id) && !relatedForApp)
+      )
         throw new Error('Selection does not belong to this removable app.')
     } else if (item.ownerIds.length)
       throw new Error('Installed application data must be reviewed with its app.')

@@ -82,6 +82,19 @@ afterEach(async () => {
 })
 
 describe('scanner and conservative ownership', () => {
+  it('does not turn a generic inner bundle name into a possible app path', async () => {
+    await bundle('Skyward', 'com.skyward.mobileaccess')
+    const original = platform.readBundleInfo
+    platform.readBundleInfo = async (path) => ({
+      ...(await original(path)),
+      names: ['Skyward', 'Mobile']
+    })
+    await data('MobileSync')
+    const result = await scan(config, platform)
+    const item = result.view.items.find((entry) => entry.name === 'MobileSync')!
+    expect(item.ownerIds).toEqual([])
+    expect(item.confidence).toBe('unmatched')
+  })
   it('recurses through application folders and stops at bundles', async () => {
     await bundle()
     await bundle('Built in', 'com.apple.fixture', true)
@@ -736,30 +749,60 @@ describe('macOS metadata and running checks', () => {
 })
 
 describe('removal review, confirmation and revalidation', () => {
-  it('rejects related paths in app and leftover reviews, even if a protected flag is lost', async () => {
+  it('allows uniquely related paths only through their installed app review', async () => {
     await bundle()
     await bundle('Docker', 'com.docker.docker')
     await data('Acme')
     await data('com.docker.install')
     const snapshot = await scan(config, platform),
-      app = snapshot.view.apps[0]!
+      app = snapshot.view.apps.find((entry) => entry.name === 'Acme')!,
+      docker = snapshot.view.apps.find((entry) => entry.name === 'Docker')!
     const related = snapshot.view.items.find((item) => item.name === 'Acme')!
-    expect(snapshot.view.apps.find((app) => app.name === 'Acme')!.relatedItemIds).toEqual([
-      related.id
-    ])
-    related.protected = false
+    expect(app.relatedItemIds).toEqual([related.id])
+    expect(related).toMatchObject({ confidence: 'related', protected: true, ownerIds: [app.id] })
     const trash = vi.fn(),
       service = new RemovalService(config, platform, trash)
     service.setSnapshot(snapshot)
-    for (const appId of [undefined, app.id])
-      await expect(
-        service.review({ scanId: snapshot.view.id, itemIds: [related.id], appId })
-      ).rejects.toThrow('Protected')
+    await expect(
+      service.review({ scanId: snapshot.view.id, itemIds: [related.id] })
+    ).rejects.toThrow('Protected')
+    await expect(
+      service.review({ scanId: snapshot.view.id, itemIds: [related.id], appId: docker.id })
+    ).rejects.toThrow('Protected')
+    const plan = await service.review({
+      scanId: snapshot.view.id,
+      itemIds: [related.id],
+      appId: app.id
+    })
+    expect(plan.items.map((item) => item.id)).toEqual([related.id])
+    expect(trash).not.toHaveBeenCalled()
     const installer = snapshot.view.items.find((item) => item.name === 'com.docker.install')!
     installer.protected = false
     await expect(
       service.review({ scanId: snapshot.view.id, itemIds: [installer.id] })
     ).rejects.toThrow('Protected')
+    expect((await service.confirm(plan.id)).map((result) => result.status)).toEqual(['trashed'])
+    expect(trash).toHaveBeenCalledWith(related.path)
+    expect(trash).not.toHaveBeenCalledWith(app.path)
+  })
+  it('keeps a possible path unavailable when it relates to multiple installed apps', async () => {
+    await bundle()
+    await file(
+      join(config.appRoots[1]!, 'Acme.app/Contents/fixture.json'),
+      JSON.stringify({ bundleId: 'dev.other.Acme', name: 'Acme' })
+    )
+    await data('Acme')
+    const snapshot = await scan(config, platform)
+    const related = snapshot.view.items.find((item) => item.name === 'Acme')!
+    expect(related).toMatchObject({ confidence: 'related', protected: true })
+    expect(related.ownerIds).toHaveLength(2)
+    const trash = vi.fn(),
+      service = new RemovalService(config, platform, trash)
+    service.setSnapshot(snapshot)
+    for (const app of snapshot.view.apps)
+      await expect(
+        service.review({ scanId: snapshot.view.id, itemIds: [related.id], appId: app.id })
+      ).rejects.toThrow('Protected')
     expect(trash).not.toHaveBeenCalled()
   })
   async function setup() {

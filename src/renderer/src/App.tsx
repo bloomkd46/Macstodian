@@ -16,6 +16,7 @@ import {
   Trash2,
   X
 } from 'lucide-react'
+import { reviewableRelatedPath } from '../../shared/api'
 import type {
   InstalledApp,
   RemovalPlan,
@@ -56,6 +57,8 @@ const errorMessage = (error: unknown) =>
     : String(error)
 const removable = (item: ScanItem) =>
   !item.protected && !item.partial && !['shared', 'related'].includes(item.confidence)
+const reviewableForApp = (item: ScanItem, app: InstalledApp) =>
+  !app.protected && (removable(item) || reviewableRelatedPath(item, app))
 type LeftoverGroup = {
   key: string
   name: string
@@ -292,7 +295,7 @@ export function App() {
     [items]
   )
   const reviewItems = reviewApp
-    ? [reviewApp.bundleItemId, ...reviewApp.dataItemIds]
+    ? [reviewApp.bundleItemId, ...reviewApp.dataItemIds, ...reviewApp.relatedItemIds]
         .map((id) => items.get(id))
         .filter((item): item is ScanItem => !!item)
     : []
@@ -462,7 +465,8 @@ export function App() {
                 <span>SHARED & POSSIBLE RELATED DATA</span>
                 <strong>{formatBytes(totals.related)}</strong>
                 <small>
-                  {shared.length} shared · {related.length} possible related · protected
+                  {shared.length} shared protected · {related.length} possible related · review in
+                  app
                 </small>
               </div>
               <div>
@@ -614,8 +618,9 @@ export function App() {
                   <Info size={17} />
                   <span>
                     Unmatched does not mean unused. Exact bundle IDs identify owners. Possible name
-                    and helper associations appear under app details and in displayed app sizes, but
-                    remain protected. Generic, shared, and protected data cannot be selected.
+                    and helper associations appear under app details and in displayed app sizes.
+                    Uniquely linked paths can be chosen in that app’s removal review; shared and
+                    protected leftovers cannot be selected here.
                   </span>
                 </div>
                 <div className="leftover-list">
@@ -675,7 +680,7 @@ export function App() {
               <PathList
                 key={`${snapshot.id}-related`}
                 title="Possible related app data"
-                caption={`${formatBytes(sum(related))} · protected · counted once in scan summary`}
+                caption={`${formatBytes(sum(related))} · app review only · counted once in scan summary`}
                 items={related}
                 busy={!!busy}
                 onReveal={reveal}
@@ -748,7 +753,7 @@ export function App() {
             <p>
               {plan
                 ? 'Every path below will be moved to Trash. Check the full list before confirming.'
-                : 'Choose the bundle and any data separately. Cache and settings / local data start unchecked.'}
+                : 'Choose the bundle and any data separately. Possible related paths are suggestions, not confirmed ownership; inspect them before including them. All data starts unchecked.'}
             </p>
             {error && (
               <div role="alert" className="notice error">
@@ -773,13 +778,16 @@ export function App() {
                 ? plan.items.map((item) => (
                     <PathItem item={item} key={item.id} busy={!!busy} onReveal={reveal} />
                   ))
-                : ['bundle', 'cache', 'data'].map((group) => {
+                : ['bundle', 'cache', 'data', 'related'].map((group) => {
                     const groupItems = reviewItems.filter((item) =>
-                      group === 'bundle'
-                        ? item.category === 'bundle'
-                        : group === 'cache'
-                          ? ['cache', 'logs'].includes(item.category)
-                          : !['bundle', 'cache', 'logs'].includes(item.category)
+                      group === 'related'
+                        ? item.confidence === 'related'
+                        : item.confidence !== 'related' &&
+                          (group === 'bundle'
+                            ? item.category === 'bundle'
+                            : group === 'cache'
+                              ? ['cache', 'logs'].includes(item.category)
+                              : !['bundle', 'cache', 'logs'].includes(item.category))
                     )
                     return (
                       groupItems.length > 0 && (
@@ -789,35 +797,49 @@ export function App() {
                               ? 'Application bundle'
                               : group === 'cache'
                                 ? 'Caches & logs'
-                                : 'Settings & local data'}
+                                : group === 'data'
+                                  ? 'Settings & local data'
+                                  : 'Possible related data · ownership unconfirmed'}
                           </h3>
-                          {groupItems.map((item) => (
-                            <label className="review-choice" key={item.id}>
-                              <input
-                                type="checkbox"
-                                aria-label={`Include ${item.path}`}
-                                title={
-                                  !removable(item)
-                                    ? 'Unavailable: this item is protected or incompletely measured.'
-                                    : busy
-                                      ? 'Wait for the current operation to finish.'
-                                      : 'Select this item'
-                                }
-                                disabled={!!busy || !removable(item)}
-                                checked={appSelection.has(item.id)}
-                                onChange={() =>
-                                  setAppSelection((values) => toggle(values, item.id))
-                                }
-                              />
-                              <div>
-                                <code>{item.path}</code>
-                                <small>
-                                  {categoryNames[item.category]} · {formatBytes(item.bytes)}
-                                  {!removable(item) ? ' · protected / incomplete' : ''}
-                                </small>
-                              </div>
-                            </label>
-                          ))}
+                          {groupItems.map((item) => {
+                            const canInclude = reviewApp && reviewableForApp(item, reviewApp)
+                            return (
+                              <label
+                                className={`review-choice${group === 'related' ? ' possible-choice' : ''}`}
+                                key={item.id}
+                              >
+                                <input
+                                  type="checkbox"
+                                  aria-label={`Include ${item.path}`}
+                                  title={
+                                    !canInclude
+                                      ? 'Unavailable: this path is ambiguous, protected, or incompletely measured.'
+                                      : busy
+                                        ? 'Wait for the current operation to finish.'
+                                        : item.confidence === 'related'
+                                          ? 'Select this possible related path after reviewing it'
+                                          : 'Select this item'
+                                  }
+                                  disabled={!!busy || !canInclude}
+                                  checked={appSelection.has(item.id)}
+                                  onChange={() =>
+                                    setAppSelection((values) => toggle(values, item.id))
+                                  }
+                                />
+                                <div>
+                                  <code>{item.path}</code>
+                                  <small>
+                                    {categoryNames[item.category]} · {formatBytes(item.bytes)}
+                                    {item.confidence === 'related' ? ' · possible relation' : ''}
+                                    {!canInclude ? ' · unavailable' : ''}
+                                  </small>
+                                  {item.confidence === 'related' && (
+                                    <small className="match-reason">{item.reason}</small>
+                                  )}
+                                </div>
+                              </label>
+                            )
+                          })}
                         </div>
                       )
                     )
@@ -880,7 +902,10 @@ const PathItem = memo(function PathItem({
   return (
     <div className="path-item">
       <div className="path-top">
-        <span className="category">{categoryNames[item.category]}</span>
+        <span className="category">
+          {item.confidence === 'related' ? 'Possible related · ' : ''}
+          {categoryNames[item.category]}
+        </span>
         <strong>
           {formatBytes(item.bytes)}
           {item.partial ? ' · partial' : ''}
@@ -1017,7 +1042,7 @@ const AppRows = memo(function AppRows({
             <div className="app-detail-heading">
               <strong>Bundle & every matched path</strong>
               <span>
-                Possible related paths are protected and shown separately in the size estimates.
+                Possible related paths are suggestions and can be reviewed individually for removal.
               </span>
             </div>
             {[app.bundleItemId, ...app.dataItemIds, ...app.sharedItemIds].map((id) => {
@@ -1029,7 +1054,8 @@ const AppRows = memo(function AppRows({
                 <div className="app-detail-heading">
                   <strong>Possible related paths</strong>
                   <span>
-                    Ownership unconfirmed · protected · included in displayed size estimates
+                    Ownership unconfirmed · optional in app removal review · included in displayed
+                    size estimates
                   </span>
                 </div>
                 {app.relatedItemIds.map((id) => {

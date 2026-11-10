@@ -1,5 +1,7 @@
 # Adaptive matching investigation — November 10, 2026
 
+This is a historical matching study. The current app allows uniquely linked possible paths to be selected, unchecked by default, in the associated app's removal review.
+
 A fresh production Electron scan with Trash disabled found 203 apps and 1,378 external data candidates. Before these changes, 1,029 candidates were classified as possible leftovers. The saved scan was reclassified with the new rules so file growth and background activity cannot distort the classification comparison.
 
 | Newly recognized context                                            | Paths | Logical/native apparent size |

@@ -35,6 +35,7 @@ const UNINFORMATIVE_NAMES = new Set([
   'gpu',
   'mac',
   'macos',
+  'mobile',
   'com',
   'org',
   'net'
@@ -131,7 +132,7 @@ const related = (owners: InstalledApp[], evidence: string): OwnershipMatch => ({
   protected: true,
   reason: `${evidence}: ${uniqueApps(owners)
     .map((app) => app.name)
-    .join(', ')}. Possible relation only; protected and excluded from app totals.`
+    .join(', ')}. Ownership unconfirmed.`
 })
 const shared = (vendors: Vendor[], evidence: string): OwnershipMatch => ({
   ownerIds: uniqueApps(vendors.flatMap((vendor) => vendor.owners)).map((app) => app.id),
