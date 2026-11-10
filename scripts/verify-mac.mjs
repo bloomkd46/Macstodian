@@ -142,6 +142,26 @@ try {
     await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
   }
   await search.fill('')
+  await search.fill('Creative Cloud')
+  const sharedRow = page.locator('.apps-table tbody > tr').filter({
+    has: page.getByRole('button', { name: 'Details for Creative Cloud', exact: true })
+  })
+  let sharedAppReviewChecked = false
+  if (await sharedRow.count()) {
+    await sharedRow.getByRole('button', { name: 'Review removal' }).click()
+    const dialog = page.getByRole('dialog')
+    const sharedChoices = dialog.locator('.shared-choice')
+    expect(await sharedChoices.count()).toBeGreaterThan(0)
+    await expect(sharedChoices.first().getByRole('checkbox')).toBeDisabled()
+    await expect(sharedChoices.first().locator('.blocked-reason')).toContainText('Shared with')
+    await dialog.locator('.review-paths').evaluate((element) => {
+      element.scrollTop = element.scrollHeight
+    })
+    await page.screenshot({ path: join(output, 'shared-app-review.png') })
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+    sharedAppReviewChecked = true
+  }
+  await search.fill('')
   let reviewed = false
   const reviews = page.getByRole('button', { name: 'Review removal', exact: true })
   const reviewCount = await reviews.count()
@@ -220,6 +240,7 @@ try {
     leftovers: leftoverPaths,
     leftoverGroups,
     skywardRecognized,
+    sharedAppReviewChecked,
     appReviewDefaultsChecked: reviewed,
     skippedCount,
     packageInternalExclusions: 0,
@@ -238,6 +259,7 @@ try {
       'search / empty results',
       'iOS-style Skyward wrapper identified when installed',
       'uniquely related app paths appear unchecked in the review when present',
+      'shared app paths appear disabled with an explanation when present',
       'leftovers largest first',
       'leftover age sorting in both directions',
       'same-name leftovers grouped with inspectable paths',
