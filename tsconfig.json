@@ -18,5 +18,5 @@
     "rootDir": ".",
     "outDir": "out"
   },
-  "include": ["src", "tests", "electron.vite.config.ts", "vitest.config.ts"]
+  "include": ["src", "tests", "electron.vite.config.ts", "vitest.config.mts"]
 }
