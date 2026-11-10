@@ -1,6 +1,6 @@
 {
   "name": "macstodian",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "A local, conservative macOS storage inspector",
   "main": "out/main/index.js",
@@ -18,9 +18,10 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:release": "node --test tests/release-process.test.mjs",
     "build": "yarn typecheck && electron-vite build",
     "package": "yarn build && electron-builder --mac dir",
-    "dist": "yarn build && electron-builder --mac dmg",
+    "dist": "yarn build && electron-builder --mac dmg --publish never",
     "verify:mac": "node scripts/verify-mac.mjs",
     "test:ui": "node scripts/verify-ui.mjs",
     "format": "prettier --write .",
@@ -46,7 +47,7 @@
     "vitest": "^3.2.4"
   },
   "build": {
-    "appId": "dev.macstodian.desktop",
+    "appId": "io.github.bloomkd46.macstodian",
     "productName": "Macstodian",
     "directories": {
       "output": "release"
@@ -57,6 +58,10 @@
     ],
     "mac": {
       "category": "public.app-category.utilities",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "hardenedRuntime": false,
+      "icon": "assets/icon.svg",
+      "notarize": false,
       "target": [
         "dmg"
       ],

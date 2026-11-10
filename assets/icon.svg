@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#183b4e"/>
+      <stop offset="1" stop-color="#0c202f"/>
+    </linearGradient>
+    <linearGradient id="drive" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#f4fbfa"/>
+      <stop offset="1" stop-color="#b8d2d4"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="206" fill="url(#background)"/>
+  <path d="M248 383c0-44 36-80 80-80h368c44 0 80 36 80 80v242c0 44-36 80-80 80H328c-44 0-80-36-80-80z" fill="url(#drive)"/>
+  <rect x="285" y="340" width="454" height="260" rx="35" fill="#2b6170"/>
+  <rect x="310" y="365" width="404" height="210" rx="21" fill="#123744"/>
+  <circle cx="512" cy="470" r="75" fill="#69d1c4"/>
+  <circle cx="512" cy="470" r="39" fill="#123744"/>
+  <path d="M318 646h292" stroke="#466d77" stroke-width="20" stroke-linecap="round"/>
+  <circle cx="684" cy="645" r="20" fill="#4bc6ae"/>
+  <path d="M744 231l14 43 43 14-43 14-14 43-14-43-43-14 43-14z" fill="#b4f4e7"/>
+</svg>

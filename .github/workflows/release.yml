@@ -1,0 +1,149 @@
+name: Release macOS app
+
+on:
+  push:
+    branches: [main, beta]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Determine release version
+        id: version
+        env:
+          BEFORE_COMMIT: ${{ github.event.before }}
+        run: node scripts/release-version.mjs
+      - name: Check for an existing release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tag="v${RELEASE_VERSION}"
+          if gh release view "$tag" --json isDraft --jq .isDraft > /tmp/macstodian-release-draft 2>/dev/null; then
+            if [ "$(cat /tmp/macstodian-release-draft)" = true ]; then
+              echo 'publish=true' >> "$GITHUB_OUTPUT"
+            else
+              echo "Release $tag is already public; skipping this push"
+              echo 'publish=false' >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build ${{ matrix.arch }} DMG
+    needs: preflight
+    if: needs.preflight.outputs.publish == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Set branch release version
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: node scripts/release-version.mjs --write
+      - name: Install dependencies
+        run: corepack yarn install --immutable
+      - name: Test and build
+        run: |
+          corepack yarn test:release
+          corepack yarn test
+          corepack yarn build
+      - name: Build unsigned DMG
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: corepack yarn electron-builder --mac dmg --${{ matrix.arch }} --publish never
+      - name: Check DMG and create checksum
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          name="Macstodian-${RELEASE_VERSION}-${BUILD_ARCH}.dmg"
+          test -s "release/$name"
+          cd release
+          shasum -a 256 "$name" > "SHA256SUMS-${BUILD_ARCH}.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macstodian-${{ matrix.arch }}
+          path: |
+            release/*.dmg
+            release/SHA256SUMS-${{ matrix.arch }}.txt
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: [preflight, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: macstodian-*
+          path: release
+          merge-multiple: true
+      - name: Verify release assets
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -s "release/Macstodian-${RELEASE_VERSION}-arm64.dmg"
+          test -s "release/Macstodian-${RELEASE_VERSION}-x64.dmg"
+          cd release
+          sha256sum -c SHA256SUMS-arm64.txt
+          sha256sum -c SHA256SUMS-x64.txt
+      - name: Create draft and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${RELEASE_VERSION}"
+          if gh release view "$tag" --json isDraft --jq .isDraft > /tmp/macstodian-release-draft 2>/dev/null; then
+            if [ "$(cat /tmp/macstodian-release-draft)" != true ]; then
+              echo "Release $tag is already public; refusing to replace its assets" >&2
+              exit 1
+            fi
+            gh release upload "$tag" release/*.dmg release/SHA256SUMS-*.txt --clobber
+          else
+            prerelease=()
+            if [[ "$GITHUB_REF_NAME" == beta ]]; then
+              prerelease=(--prerelease)
+            fi
+            gh release create "$tag" release/*.dmg release/SHA256SUMS-*.txt \
+              --draft --target "$GITHUB_SHA" --generate-notes \
+              --notes 'These macOS builds are unsigned and not notarized. Check the SHA256SUMS files before installing. macOS may require approval in System Settings > Privacy & Security.' \
+              "${prerelease[@]}"
+          fi
+          gh release edit "$tag" --draft=false
