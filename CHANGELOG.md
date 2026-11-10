@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1-beta.2
+
+- Show the package version in the app's sidebar instead of a hardcoded version.
+
 ## 1.0.1-beta.1
 
 - Update Node, Yarn, Electron, and the app's build and UI dependencies, including Electron's binary installation.

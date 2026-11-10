@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import packageJson from '../../../package.json'
 import {
   AppWindow,
   ArrowDown,
@@ -384,7 +385,7 @@ export function App() {
             <br />
             You choose what goes to Trash.
           </p>
-          <div className="version">MACSTODIAN / 0.1.0</div>
+          <div className="version">MACSTODIAN / {packageJson.version}</div>
         </div>
       </aside>
       <main inert={modal || undefined}>
