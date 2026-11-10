@@ -717,10 +717,48 @@ footer span:last-child {
   padding-top: 3px;
 }
 input[type='checkbox'] {
-  accent-color: var(--accent);
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 2px solid var(--accent-text);
+  border-radius: 4px;
+  background: var(--surface);
   cursor: pointer;
-  width: 14px;
-  height: 14px;
+}
+input[type='checkbox']:enabled:hover {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+input[type='checkbox']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+input[type='checkbox']:checked::after {
+  content: '';
+  width: 8px;
+  height: 5px;
+  border-left: 2px solid var(--on-accent);
+  border-bottom: 2px solid var(--on-accent);
+  transform: translateY(-1px) rotate(-45deg);
+}
+input[type='checkbox']:disabled {
+  cursor: not-allowed;
+  border: 1px dashed var(--text-muted);
+  background: repeating-linear-gradient(135deg, var(--border) 0 2px, var(--surface-soft) 2px 5px);
+}
+input[type='checkbox']:disabled:checked::after {
+  border-color: var(--text-muted);
+}
+@media (forced-colors: active) {
+  input[type='checkbox'] {
+    appearance: auto;
+  }
+  input[type='checkbox']::after {
+    display: none;
+  }
 }
 .leftover-body {
   min-width: 0;

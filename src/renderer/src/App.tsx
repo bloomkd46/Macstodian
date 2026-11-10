@@ -526,6 +526,13 @@ export function App() {
                         <input
                           type="checkbox"
                           aria-label={`Select ${item.path}`}
+                          title={
+                            !removable(item)
+                              ? 'Unavailable: this item is protected or incompletely measured.'
+                              : busy
+                                ? 'Wait for the current operation to finish.'
+                                : 'Select this item'
+                          }
                           disabled={!!busy || !removable(item)}
                           checked={selected.has(item.id)}
                           onChange={() => setSelected(toggle(selected, item.id))}
@@ -715,6 +722,13 @@ export function App() {
                               <input
                                 type="checkbox"
                                 aria-label={`Include ${item.path}`}
+                                title={
+                                  !removable(item)
+                                    ? 'Unavailable: this item is protected or incompletely measured.'
+                                    : busy
+                                      ? 'Wait for the current operation to finish.'
+                                      : 'Select this item'
+                                }
                                 disabled={!!busy || !removable(item)}
                                 checked={appSelection.has(item.id)}
                                 onChange={() => setAppSelection(toggle(appSelection, item.id))}
