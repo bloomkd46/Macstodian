@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { matchOwnership } from '../src/main/ownership'
 import {
+  macPlatform,
   createMacPlatform,
   parseSpotlightDate,
   processBelongsToBundle,
@@ -63,6 +64,7 @@ beforeEach(async () => {
     )
   )
   platform = {
+    measureBundle: macPlatform.measureBundle,
     readBundleInfo: async (path) => {
       try {
         return JSON.parse(await readFile(join(path, 'Contents/fixture.json'), 'utf8'))
@@ -202,42 +204,51 @@ describe('scanner and conservative ownership', () => {
       'exact'
     )
   })
-  it('indexes embedded app/XPC/extension IDs, shares duplicate helpers, and skips linked metadata trees', async () => {
-    const first = await bundle(),
-      second = await bundle('Other', 'dev.other')
-    for (const [path, suffix, id] of [
-      [first, 'Contents/Helpers/Worker.app', 'dev.worker'],
-      [first, 'Contents/XPCServices/Service.xpc', 'dev.service'],
-      [first, 'Contents/PlugIns/Extension.appex', 'dev.extension'],
-      [second, 'Contents/Helpers/Worker.app', 'dev.worker']
-    ])
-      await file(
-        join(path!, suffix!, 'Contents/fixture.json'),
-        JSON.stringify({ bundleId: id, name: id })
-      )
-    const external = join(root, 'Outside.app')
-    await file(join(external, 'Contents/fixture.json'), JSON.stringify({ bundleId: 'dev.linked' }))
-    await symlink(external, join(first, 'Contents/Helpers/Linked.app'))
-    for (const name of ['dev.worker', 'dev.service', 'dev.extension', 'dev.linked'])
-      await data(name)
-    const { view } = await scan(config, platform)
-    expect(view.apps).toHaveLength(2)
-    expect(view.items.find((item) => item.name === 'dev.worker')).toMatchObject({
-      confidence: 'shared',
-      protected: true,
-      ownerIds: expect.any(Array)
+  it('treats app packages as opaque and never indexes embedded helpers or reports internal links', async () => {
+    const path = await bundle()
+    await file(
+      join(path, 'Contents/Helpers/Hidden.app/Contents/fixture.json'),
+      JSON.stringify({ bundleId: 'dev.hidden', name: 'Hidden' })
+    )
+    const external = await file(join(root, 'outside/secret'), 'external contents must not count')
+    await symlink(dirname(external), join(path, 'Contents/Linked.framework'))
+    await data('dev.hidden')
+    const readInfo = vi.spyOn(platform, 'readBundleInfo')
+    const result = await scan(config, platform)
+    expect(result.view.apps).toHaveLength(1)
+    expect(readInfo.mock.calls.map(([path]) => path)).toEqual([path])
+    expect(result.view.apps[0]!.helperBundleIds).toEqual([])
+    expect(result.view.items.find((item) => item.name === 'dev.hidden')!.ownerIds).toEqual([])
+    expect(result.view.skipped).toEqual([])
+    expect(result.view.items.find((item) => item.category === 'bundle')).toMatchObject({
+      partial: false,
+      skippedSymlinks: 0
     })
-    expect(view.items.find((item) => item.name === 'dev.worker')!.ownerIds).toHaveLength(2)
-    expect(view.items.find((item) => item.name === 'dev.service')).toMatchObject({
-      confidence: 'related',
-      protected: true
+    const before = await platform.measureBundle(path)
+    await writeFile(
+      external,
+      'a much larger external target should have no effect on package size or fingerprint'
+    )
+    expect(await platform.measureBundle(path)).toEqual(before)
+  })
+  it('stops Library traversal at nested application packages too', async () => {
+    const packagePath = join(config.dataRoots[0]!.path, 'orphan/Embedded.app')
+    await file(join(packagePath, 'Contents/MacOS/app'), 'fixture')
+    await symlink('/nonexistent/target', join(packagePath, 'Contents/normal-package-link'))
+    const result = await scan(config, platform)
+    expect(result.view.items).toHaveLength(1)
+    expect(result.view.items[0]).toMatchObject({ partial: false, skippedSymlinks: 0 })
+    expect(result.view.items[0]!.bytes).toBe((await platform.measureBundle(packagePath)).bytes)
+    expect(result.view.skipped).toEqual([])
+  })
+  it('keeps unreadable package sizes visible and prevents their removal', async () => {
+    await bundle()
+    platform.measureBundle = vi.fn(async () => {
+      throw new Error('denied fixture')
     })
-    expect(view.items.find((item) => item.name === 'dev.extension')).toMatchObject({
-      confidence: 'related',
-      protected: true
-    })
-    expect(view.items.find((item) => item.name === 'dev.linked')!.ownerIds).toEqual([])
-    expect(view.apps.every((app) => app.dataBytes === 0)).toBe(true)
+    const result = await scan(config, platform)
+    expect(result.view.apps[0]).toMatchObject({ partial: true, appBytes: 0 })
+    expect(result.view.skipped[0]!.reason).toContain('package measurement incomplete')
   })
   it('associates observed product names conservatively and treats vendor folders as shared', async () => {
     await bundle('Docker', 'com.docker.docker')
@@ -546,6 +557,19 @@ describe('removal review, confirmation and revalidation', () => {
     const { service, request, trash } = await setup(),
       plan = await service.review(request)
     await data('dev.acme.Editor', 'changed since the review')
+    await expect(service.confirm(plan.id)).rejects.toThrow('changed since scanning')
+    expect(trash).not.toHaveBeenCalled()
+  })
+  it('rejects same-size edits inside a package without changing its root timestamps', async () => {
+    const { service, request, appPath, trash } = await setup()
+    const plan = await service.review(request)
+    const stamp = await stat(appPath)
+    const before = await platform.measureBundle(appPath)
+    await writeFile(join(appPath, 'Contents/MacOS/app'), 'changed binary')
+    expect((await stat(appPath)).mtimeMs).toBe(stamp.mtimeMs)
+    const after = await platform.measureBundle(appPath)
+    expect(after.bytes).toBe(before.bytes)
+    expect(after.fingerprint).not.toBe(before.fingerprint)
     await expect(service.confirm(plan.id)).rejects.toThrow('changed since scanning')
     expect(trash).not.toHaveBeenCalled()
   })
