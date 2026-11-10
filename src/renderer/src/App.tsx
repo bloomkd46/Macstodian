@@ -59,6 +59,26 @@ const removable = (item: ScanItem) =>
   !item.protected && !item.partial && !['shared', 'related'].includes(item.confidence)
 const reviewableForApp = (item: ScanItem, app: InstalledApp) =>
   !app.protected && (removable(item) || reviewableRelatedPath(item, app))
+const reviewBlockReason = (
+  item: ScanItem,
+  app: InstalledApp,
+  appNames: Map<string, string>
+): string | null => {
+  if (reviewableForApp(item, app)) return null
+  const linkedNames = item.ownerIds.map((id) => appNames.get(id) ?? 'another app')
+  const linkedApps = `${linkedNames.slice(0, 2).join(', ')}${
+    linkedNames.length > 2 ? `, and ${linkedNames.length - 2} more` : ''
+  }`
+  if (item.confidence === 'shared')
+    return item.ownerIds.length > 1
+      ? `Shared with ${linkedApps}. Removing it could affect those apps.`
+      : 'Shared vendor data may also be used by other apps. It cannot be removed with this app.'
+  if (item.confidence === 'related' && item.ownerIds.length > 1)
+    return `Possible match for ${linkedApps}. It cannot be removed with just one app.`
+  if (item.partial) return 'The scan could not fully measure this path, so removal is unavailable.'
+  if (app.protected) return 'This application is protected from removal.'
+  return 'This path is protected from removal.'
+}
 type LeftoverGroup = {
   key: string
   name: string
@@ -107,6 +127,10 @@ export function App() {
   const [plan, setPlan] = useState<RemovalPlan | null>(null)
   const [results, setResults] = useState<RemovalResult[] | null>(null)
   const items = useMemo(() => new Map(snapshot?.items.map((item) => [item.id, item])), [snapshot])
+  const appNames = useMemo(
+    () => new Map(snapshot?.apps.map((app) => [app.id, app.name])),
+    [snapshot]
+  )
   const relatedBytes = useMemo(
     () =>
       new Map(
@@ -295,7 +319,12 @@ export function App() {
     [items]
   )
   const reviewItems = reviewApp
-    ? [reviewApp.bundleItemId, ...reviewApp.dataItemIds, ...reviewApp.relatedItemIds]
+    ? [
+        reviewApp.bundleItemId,
+        ...reviewApp.dataItemIds,
+        ...reviewApp.relatedItemIds,
+        ...reviewApp.sharedItemIds
+      ]
         .map((id) => items.get(id))
         .filter((item): item is ScanItem => !!item)
     : []
@@ -753,7 +782,7 @@ export function App() {
             <p>
               {plan
                 ? 'Every path below will be moved to Trash. Check the full list before confirming.'
-                : 'Choose the bundle and any data separately. Possible related paths are suggestions, not confirmed ownership; inspect them before including them. All data starts unchecked.'}
+                : 'Choose the bundle and any data separately. Possible related paths are suggestions, not confirmed ownership; inspect them before including them. Shared and ambiguous paths are shown for context but cannot be selected. All data starts unchecked.'}
             </p>
             {error && (
               <div role="alert" className="notice error">
@@ -778,16 +807,18 @@ export function App() {
                 ? plan.items.map((item) => (
                     <PathItem item={item} key={item.id} busy={!!busy} onReveal={reveal} />
                   ))
-                : ['bundle', 'cache', 'data', 'related'].map((group) => {
+                : ['bundle', 'cache', 'data', 'related', 'shared'].map((group) => {
                     const groupItems = reviewItems.filter((item) =>
                       group === 'related'
                         ? item.confidence === 'related'
-                        : item.confidence !== 'related' &&
-                          (group === 'bundle'
-                            ? item.category === 'bundle'
-                            : group === 'cache'
-                              ? ['cache', 'logs'].includes(item.category)
-                              : !['bundle', 'cache', 'logs'].includes(item.category))
+                        : group === 'shared'
+                          ? item.confidence === 'shared'
+                          : !['related', 'shared'].includes(item.confidence) &&
+                            (group === 'bundle'
+                              ? item.category === 'bundle'
+                              : group === 'cache'
+                                ? ['cache', 'logs'].includes(item.category)
+                                : !['bundle', 'cache', 'logs'].includes(item.category))
                     )
                     return (
                       groupItems.length > 0 && (
@@ -799,21 +830,29 @@ export function App() {
                                 ? 'Caches & logs'
                                 : group === 'data'
                                   ? 'Settings & local data'
-                                  : 'Possible related data · ownership unconfirmed'}
+                                  : group === 'related'
+                                    ? 'Possible related data · ownership unconfirmed'
+                                    : 'Shared data · removal unavailable'}
                           </h3>
                           {groupItems.map((item) => {
-                            const canInclude = reviewApp && reviewableForApp(item, reviewApp)
+                            const blockReason = reviewApp
+                              ? reviewBlockReason(item, reviewApp, appNames)
+                              : 'This path is unavailable.'
+                            const canInclude = !blockReason
                             return (
                               <label
-                                className={`review-choice${group === 'related' ? ' possible-choice' : ''}`}
+                                className={`review-choice${group === 'related' ? ' possible-choice' : ''}${group === 'shared' ? ' shared-choice' : ''}${blockReason ? ' blocked-choice' : ''}`}
                                 key={item.id}
                               >
                                 <input
                                   type="checkbox"
                                   aria-label={`Include ${item.path}`}
+                                  aria-describedby={
+                                    blockReason ? `review-block-${item.id}` : undefined
+                                  }
                                   title={
-                                    !canInclude
-                                      ? 'Unavailable: this path is ambiguous, protected, or incompletely measured.'
+                                    blockReason
+                                      ? blockReason
                                       : busy
                                         ? 'Wait for the current operation to finish.'
                                         : item.confidence === 'related'
@@ -831,10 +870,18 @@ export function App() {
                                   <small>
                                     {categoryNames[item.category]} · {formatBytes(item.bytes)}
                                     {item.confidence === 'related' ? ' · possible relation' : ''}
-                                    {!canInclude ? ' · unavailable' : ''}
+                                    {item.confidence === 'shared' ? ' · shared' : ''}
                                   </small>
-                                  {item.confidence === 'related' && (
+                                  {['related', 'shared'].includes(item.confidence) && (
                                     <small className="match-reason">{item.reason}</small>
+                                  )}
+                                  {blockReason && (
+                                    <small
+                                      className="blocked-reason"
+                                      id={`review-block-${item.id}`}
+                                    >
+                                      {blockReason}
+                                    </small>
                                   )}
                                 </div>
                               </label>

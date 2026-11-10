@@ -995,6 +995,9 @@ input[type='checkbox']:disabled:checked::after {
   border-color: var(--warning-border);
   background: var(--warning-bg);
 }
+.review-choice.blocked-choice {
+  background: var(--surface-soft);
+}
 .review-choice div {
   min-width: 0;
 }
@@ -1006,6 +1009,11 @@ input[type='checkbox']:disabled:checked::after {
 }
 .review-choice .match-reason {
   line-height: 1.5;
+}
+.review-choice .blocked-reason {
+  color: var(--warning-text);
+  line-height: 1.5;
+  font-weight: 600;
 }
 .modal-actions {
   border-top: 1px solid var(--border);

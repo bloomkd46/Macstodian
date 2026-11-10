@@ -54,7 +54,20 @@ const items = [
       ['alpha'],
       true
     ),
-    confidence: 'shared'
+    confidence: 'shared',
+    reason: 'Vendor family data may be used by more than one app.'
+  },
+  {
+    ...item(
+      'ambiguous',
+      'support',
+      '/fixture/Library/Application Support/Alpha Helper',
+      30,
+      ['alpha', 'running'],
+      true
+    ),
+    confidence: 'related',
+    reason: 'Possible name match to Alpha and Running App.'
   }
 ]
 const app = (id, name, bundleItemId, path, appBytes, dataItemIds = [], dataBytes = 0) => ({
@@ -68,7 +81,7 @@ const app = (id, name, bundleItemId, path, appBytes, dataItemIds = [], dataBytes
   totalBytes: appBytes + dataBytes,
   bundleId: `dev.${id}`,
   sharedItemIds: id === 'alpha' ? ['shared'] : [],
-  relatedItemIds: id === 'alpha' ? ['related'] : [],
+  relatedItemIds: id === 'alpha' ? ['related', 'ambiguous'] : [],
   lastOpened: null,
   dataLastChanged: dataBytes ? Date.UTC(2025, 0, 2) : null,
   partial: false,
@@ -141,13 +154,13 @@ try {
   await page.getByRole('button', { name: 'Scan this Mac', exact: true }).click()
   await expect(page.getByRole('region', { name: 'Scan summary' })).toBeVisible()
   await expect(page.locator('.stats > div').nth(1).locator('strong')).toHaveText('75 B')
-  await expect(page.locator('.stats > div').nth(2).locator('strong')).toHaveText('170 B')
+  await expect(page.locator('.stats > div').nth(2).locator('strong')).toHaveText('200 B')
   await expect(page.locator('.stats > div')).toHaveCount(4)
   await expect(page.locator('.stats > div').nth(3).locator('strong')).toHaveText('60 B')
   const alphaRow = page.locator('.apps-table tbody > tr').first()
-  await expect(alphaRow.locator('td').nth(2)).toContainText('165 B')
-  await expect(alphaRow.locator('td').nth(2)).toContainText('1 possible related path · 90 B')
-  await expect(alphaRow.locator('td').nth(3)).toContainText('265 B')
+  await expect(alphaRow.locator('td').nth(2)).toContainText('195 B')
+  await expect(alphaRow.locator('td').nth(2)).toContainText('2 possible related paths · 120 B')
+  await expect(alphaRow.locator('td').nth(3)).toContainText('295 B')
   await expect(alphaRow.locator('td').nth(3)).toContainText('175 B without possible related')
   await checkAppearance('dark', 'apps', ['.stats', '.table-wrap'])
   await checkAppearance('light', 'apps', ['.stats', '.table-wrap'])
@@ -162,17 +175,40 @@ try {
   await page.getByRole('button', { name: 'Details for Alpha', exact: true }).click()
   await page.getByRole('button', { name: 'Review removal', exact: true }).first().click()
   let dialog = page.getByRole('dialog')
-  await expect(dialog.getByRole('checkbox')).toHaveCount(4)
+  await expect(dialog.getByRole('checkbox')).toHaveCount(6)
   await expect(dialog).toContainText('Possible related data · ownership unconfirmed')
+  await expect(dialog).toContainText('Shared data · removal unavailable')
   await expect(dialog).toContainText('/fixture/Library/Application Support/Alpha')
   await expect(dialog.getByRole('checkbox').first()).toBeChecked()
   await expect(dialog.getByRole('checkbox').nth(1)).not.toBeChecked()
   await expect(dialog.getByRole('checkbox').nth(2)).not.toBeChecked()
   const possiblePath = dialog.getByRole('checkbox', {
-    name: 'Include /fixture/Library/Application Support/Alpha'
+    name: 'Include /fixture/Library/Application Support/Alpha',
+    exact: true
   })
   await expect(possiblePath).toBeEnabled()
   await expect(possiblePath).not.toBeChecked()
+  const ambiguousPath = dialog.getByRole('checkbox', {
+    name: 'Include /fixture/Library/Application Support/Alpha Helper'
+  })
+  const sharedPath = dialog.getByRole('checkbox', {
+    name: 'Include /fixture/Library/Application Support/Microsoft'
+  })
+  await expect(ambiguousPath).toBeDisabled()
+  await expect(sharedPath).toBeDisabled()
+  await expect(ambiguousPath.locator('..')).toContainText(
+    'Possible match for Alpha, Running App. It cannot be removed with just one app.'
+  )
+  await expect(sharedPath.locator('..')).toContainText(
+    'Shared vendor data may also be used by other apps. It cannot be removed with this app.'
+  )
+  await dialog.locator('.review-paths').evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
+  await page.screenshot({ path: join(output, 'dark-review-blocked.png') })
+  await dialog.locator('.review-paths').evaluate((element) => {
+    element.scrollTop = 0
+  })
   await dialog.getByRole('checkbox').nth(1).check()
   await dialog.getByRole('checkbox').nth(2).check()
   await possiblePath.check()
@@ -339,6 +375,7 @@ try {
     passed: [
       'app bundle selected; all data unchecked by default',
       'possible related paths offered unchecked in their app review and included only by choice',
+      'shared and ambiguous app paths visible but disabled with specific reasons',
       'possible associations excluded from leftovers and counted once in the scan summary',
       'separate cache and settings choices',
       'review lists all selected paths before confirmation',
