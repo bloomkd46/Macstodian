@@ -91,7 +91,9 @@ export async function measure(
   path: string,
   category: Exclude<Category, 'bundle'>,
   skip: (path: string, reason: string) => void = () => {},
-  tick: () => void = () => {}
+  tick: () => void = () => {},
+  measureBundle: (path: string) => Promise<{ bytes: number; fingerprint: string }> =
+    macPlatform.measureBundle
 ): Promise<Measurement> {
   let bytes = 0,
     latestChange: number | null = null,
@@ -137,7 +139,7 @@ export async function measure(
         if (/\.app$/i.test(entry.path)) {
           // Packages embedded in Library data are opaque too. Include their native
           // aggregate and change fingerprint, without exposing their internal links.
-          const bundle = await macPlatform.measureBundle(entry.path)
+          const bundle = await measureBundle(entry.path)
           bytes += bundle.bytes
           hash.update(bundle.fingerprint)
           continue
@@ -351,10 +353,16 @@ export async function scan(
   await mapLimited(dataCandidates, async ({ path, category }) => {
     try {
       const stat = await assertNoSymlink(path)
-      const result = await measure(path, category, skip, () => {
-        files++
-        report('measuring', path)
-      })
+      const result = await measure(
+        path,
+        category,
+        skip,
+        () => {
+          files++
+          report('measuring', path)
+        },
+        platform.measureBundle
+      )
       if (!sameIdentity(identity(stat), identity(await assertNoSymlink(path))))
         throw new Error('Item changed during scan; rescan required.')
       const match = matchOwnership(basename(path), category)
