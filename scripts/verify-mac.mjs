@@ -70,6 +70,21 @@ try {
     timeout: 20 * 60 * 1000
   })
   clearInterval(heartbeat)
+  await expect(page.locator('.stats > div')).toHaveCount(4)
+  await expect(page.locator('.stats > div').nth(3)).toContainText('POSSIBLE LEFTOVERS')
+  let skippedCount = 0
+  if (await page.locator('.skipped').count()) {
+    await page.locator('.skipped summary').click()
+    const skippedPaths = await page.locator('.skipped-list code').allTextContents()
+    skippedCount = skippedPaths.length
+    // Root identity failures can reference Info.plist. Package internals must not
+    // leak into the exclusion list from size measurement or helper discovery.
+    const packageInternalExclusions = skippedPaths.filter(
+      (path) => /\.app\//i.test(path) && !/\.app\/Contents\/Info\.plist$/i.test(path)
+    )
+    expect(packageInternalExclusions).toEqual([])
+    await page.locator('.skipped summary').click()
+  }
   const apps = await page.locator('tbody > tr').count()
   expect(apps).toBeGreaterThan(0)
   await page.screenshot({ path: join(output, 'apps.png') })
@@ -149,6 +164,8 @@ try {
     apps,
     leftovers,
     appReviewDefaultsChecked: reviewed,
+    skippedCount,
+    packageInternalExclusions: 0,
     security,
     rendererErrors: errors,
     networkRequests: network,
@@ -156,6 +173,8 @@ try {
     checks: [
       'production Electron launch',
       'real read-only scan',
+      'four scan-wide summary cards including possible leftover bytes',
+      'no package-internal paths in scanner exclusions',
       'both tabs during scan',
       'app size sorting in both directions',
       'expanded matched paths',

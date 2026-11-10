@@ -241,6 +241,14 @@ describe('scanner and conservative ownership', () => {
     expect(result.view.items[0]!.bytes).toBe((await platform.measureBundle(packagePath)).bytes)
     expect(result.view.skipped).toEqual([])
   })
+  it('reports native package sizes in bytes rather than du output blocks', async () => {
+    const path = await bundle()
+    const payload = 1024 * 1024
+    await file(join(path, 'Contents/Resources/known-size'), 'x'.repeat(payload))
+    const measured = await platform.measureBundle(path)
+    expect(measured.bytes).toBeGreaterThanOrEqual(payload)
+    expect(measured.bytes).toBeLessThan(payload + 64 * 1024)
+  })
   it('keeps unreadable package sizes visible and prevents their removal', async () => {
     await bundle()
     platform.measureBundle = vi.fn(async () => {
@@ -299,6 +307,19 @@ describe('scanner and conservative ownership', () => {
       protected: true,
       ownerIds: [view.apps.find((app) => app.name === 'Nebula Studio')!.id]
     })
+  })
+  it('retains exact short app names without inferring broad short prefixes', async () => {
+    await bundle('Arc', 'company.browser.arc')
+    await bundle('R', 'org.r-project.R')
+    const { view } = await scan(config, platform)
+    for (const name of ['Arc', 'R'])
+      expect(matchOwnership(name, 'support', view.apps)).toMatchObject({
+        ownerIds: [view.apps.find((app) => app.name === name)!.id],
+        confidence: 'related',
+        protected: true
+      })
+    expect(matchOwnership('Arc Helper', 'support', view.apps).confidence).toBe('related')
+    expect(matchOwnership('R Tools', 'support', view.apps).ownerIds).toEqual([])
   })
   it('prefers exact channel names and the longest app-name prefix', async () => {
     await bundle('Nebula', 'dev.vendor.nebula')
