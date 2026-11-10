@@ -4,7 +4,7 @@ A local-only macOS storage inspector built with Electron, React, and TypeScript.
 
 The summary shows application bundles, confirmed matched data, shared/possible related data, and all possible leftover bytes (including protected and uncertain paths). Search, the Selectable only filter, and selection do not change these scan-wide totals. App table data and total sizes also show possible related paths; muted details identify their contribution and the confirmed total. These display estimates do not change what can be selected for removal.
 
-The Leftovers list groups paths with the same name into one row and shows their combined size. Expand a group to inspect its locations or select paths individually. Group selection includes only eligible paths; protected and incomplete paths stay unavailable.
+The Leftovers list groups paths with the same name into one row and shows their combined size. Expand a group to inspect its locations or select paths individually. Sort by combined size or the latest observed file change (oldest or newest first); unknown dates appear last. Group selection includes only eligible paths; protected and incomplete paths stay unavailable.
 
 Appearance follows macOS automatically, including changes between Light and Dark Mode while the app is open.
 

@@ -26,6 +26,7 @@ import type {
 } from '../../shared/api'
 
 type SortKey = 'name' | 'appBytes' | 'dataBytes' | 'totalBytes' | 'lastOpened' | 'dataLastChanged'
+type LeftoverSort = 'size-desc' | 'size-asc' | 'age-asc' | 'age-desc'
 const categoryNames = {
   bundle: 'Application bundle',
   support: 'Application support',
@@ -60,6 +61,7 @@ type LeftoverGroup = {
   name: string
   items: ScanItem[]
   bytes: number
+  latestChange: number | null
   selectableIds: string[]
 }
 const groupLeftovers = (entries: ScanItem[]): LeftoverGroup[] => {
@@ -68,14 +70,16 @@ const groupLeftovers = (entries: ScanItem[]): LeftoverGroup[] => {
     const key = item.name.toLowerCase()
     let group = groups.get(key)
     if (!group) {
-      group = { key, name: item.name, items: [], bytes: 0, selectableIds: [] }
+      group = { key, name: item.name, items: [], bytes: 0, latestChange: null, selectableIds: [] }
       groups.set(key, group)
     }
     group.items.push(item)
     group.bytes += item.bytes
+    if (item.latestChange !== null)
+      group.latestChange = Math.max(group.latestChange ?? -Infinity, item.latestChange)
     if (removable(item)) group.selectableIds.push(item.id)
   }
-  return [...groups.values()].sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name))
+  return [...groups.values()]
 }
 
 export function App() {
@@ -88,6 +92,7 @@ export function App() {
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
   const [selectableOnly, setSelectableOnly] = useState(false)
+  const [leftoverSort, setLeftoverSort] = useState<LeftoverSort>('size-desc')
   const [sort, setSort] = useState<{ key: SortKey; ascending: boolean }>({
     key: 'totalBytes',
     ascending: false
@@ -162,12 +167,28 @@ export function App() {
   )
   const visibleGroups = useMemo(() => {
     const search = query.toLowerCase()
-    return displayGroups.filter(
-      (group) =>
-        group.name.toLowerCase().includes(search) ||
-        group.items.some((item) => item.path.toLowerCase().includes(search))
-    )
-  }, [displayGroups, query])
+    return displayGroups
+      .filter(
+        (group) =>
+          group.name.toLowerCase().includes(search) ||
+          group.items.some((item) => item.path.toLowerCase().includes(search))
+      )
+      .sort((a, b) => {
+        if (leftoverSort.startsWith('age')) {
+          if (a.latestChange === null && b.latestChange !== null) return 1
+          if (b.latestChange === null && a.latestChange !== null) return -1
+          if (a.latestChange !== null && b.latestChange !== null) {
+            const ageOrder =
+              (a.latestChange - b.latestChange) * (leftoverSort === 'age-asc' ? 1 : -1)
+            if (ageOrder) return ageOrder
+          }
+        } else {
+          const sizeOrder = (a.bytes - b.bytes) * (leftoverSort === 'size-asc' ? 1 : -1)
+          if (sizeOrder) return sizeOrder
+        }
+        return b.bytes - a.bytes || a.name.localeCompare(b.name)
+      })
+  }, [displayGroups, query, leftoverSort])
   const visibleLeftoverPaths = visibleGroups.reduce((total, group) => total + group.items.length, 0)
   const toggleSelected = useCallback(
     (id: string) => setSelected((values) => toggle(values, id)),
@@ -485,6 +506,22 @@ export function App() {
                 )}
               </div>
               <div className="toolbar-controls">
+                {tab === 'leftovers' && (
+                  <label className="leftover-sort">
+                    Sort
+                    <select
+                      aria-label="Sort leftovers"
+                      title="Age uses the latest observed file change in each group; unknown dates appear last."
+                      value={leftoverSort}
+                      onChange={(event) => setLeftoverSort(event.target.value as LeftoverSort)}
+                    >
+                      <option value="size-desc">Size: largest first</option>
+                      <option value="size-asc">Size: smallest first</option>
+                      <option value="age-asc">Age: oldest first</option>
+                      <option value="age-desc">Age: newest first</option>
+                    </select>
+                  </label>
+                )}
                 {tab === 'leftovers' && (
                   <button
                     className={`filter-toggle${selectableOnly ? ' active' : ''}`}
@@ -1128,6 +1165,7 @@ const LeftoverGroupRow = memo(function LeftoverGroupRow({
           </div>
           <p className="group-categories">
             {[...new Set(group.items.map((item) => categoryNames[item.category]))].join(' · ')}
+            {' · '}Latest observed file change: {date(group.latestChange)}
           </p>
         </div>
       </div>
