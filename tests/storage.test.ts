@@ -601,6 +601,79 @@ describe('scanner and conservative ownership', () => {
 })
 
 describe('macOS metadata and running checks', () => {
+  it('recognizes physical iOS wrapper metadata and keeps the outer app reviewable', async () => {
+    const outer = join(config.appRoots[0]!, 'Skyward.app')
+    const inner = join(outer, 'Wrapper/Mobile.iOS.app/Info.plist')
+    await file(inner, 'fixture plist')
+    await symlink('Wrapper/Mobile.iOS.app', join(outer, 'WrappedBundle'))
+    await data('com.skyward.mobileaccess')
+    const run = vi.fn(async (_command: string, args: string[]) => {
+      if (args.at(-1) === join(outer, 'Contents/Info.plist')) throw new Error('No outer Info.plist')
+      expect(args.at(-1)).toBe(inner)
+      return {
+        stdout: JSON.stringify({
+          CFBundleIdentifier: 'com.skyward.mobileaccess',
+          CFBundleDisplayName: 'Skyward'
+        })
+      }
+    })
+    const wrappedPlatform = { ...platform, readBundleInfo: createMacPlatform(run).readBundleInfo }
+    const snapshot = await scan(config, wrappedPlatform)
+    const app = snapshot.view.apps[0]!
+    expect(app).toMatchObject({
+      name: 'Skyward',
+      bundleId: 'com.skyward.mobileaccess',
+      protected: false,
+      partial: false
+    })
+    expect(app.dataItemIds).toHaveLength(1)
+    expect(
+      snapshot.view.skipped.some((entry) => entry.path.endsWith('Skyward.app/Contents/Info.plist'))
+    ).toBe(false)
+    const trash = vi.fn(async () => {})
+    const service = new RemovalService(config, wrappedPlatform, trash)
+    service.setSnapshot(snapshot)
+    const plan = await service.review({
+      scanId: snapshot.view.id,
+      appId: app.id,
+      itemIds: [app.bundleItemId, ...app.dataItemIds]
+    })
+    expect(plan.appName).toBe('Skyward')
+    expect(trash).not.toHaveBeenCalled()
+  })
+  it('rejects wrapped metadata that could escape through a link', async () => {
+    const run = vi.fn(
+      async (
+        _command: string,
+        _args: string[],
+        _options: { timeout: number; maxBuffer?: number }
+      ) => ({
+        stdout: JSON.stringify({ CFBundleIdentifier: 'dev.untrusted' })
+      })
+    )
+    const mac = createMacPlatform(async (command, args, options) => {
+      if (args.at(-1)?.endsWith('/Contents/Info.plist')) throw new Error('No outer plist')
+      return run(command, args, options)
+    })
+    const outside = await file(join(root, 'outside/Info.plist'))
+    const escaped = join(config.appRoots[0]!, 'Escaped.app')
+    await mkdir(escaped)
+    await symlink('../outside.app', join(escaped, 'WrappedBundle'))
+    expect(await mac.readBundleInfo(escaped)).toEqual({ bundleId: null, name: null })
+
+    const linkedDirectory = join(config.appRoots[0]!, 'LinkedDirectory.app')
+    await mkdir(join(linkedDirectory, 'Wrapper'), { recursive: true })
+    await symlink(dirname(outside), join(linkedDirectory, 'Wrapper/Inner.app'))
+    await symlink('Wrapper/Inner.app', join(linkedDirectory, 'WrappedBundle'))
+    expect(await mac.readBundleInfo(linkedDirectory)).toEqual({ bundleId: null, name: null })
+
+    const linkedPlist = join(config.appRoots[0]!, 'LinkedPlist.app')
+    await mkdir(join(linkedPlist, 'Wrapper/Inner.app'), { recursive: true })
+    await symlink(outside, join(linkedPlist, 'Wrapper/Inner.app/Info.plist'))
+    await symlink('Wrapper/Inner.app', join(linkedPlist, 'WrappedBundle'))
+    expect(await mac.readBundleInfo(linkedPlist)).toEqual({ bundleId: null, name: null })
+    expect(run).not.toHaveBeenCalled()
+  })
   it('retains both bundle names for ownership suggestions', async () => {
     const mac = createMacPlatform(async () => ({
       stdout: JSON.stringify({

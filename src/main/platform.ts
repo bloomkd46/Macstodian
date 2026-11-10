@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { lstat, readlink } from 'node:fs/promises'
 import { promisify } from 'node:util'
-import { resolve, sep } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 
 const exec = promisify(execFile)
 export interface BundleInfo {
@@ -39,6 +40,26 @@ export type CommandRunner = (
   options: { timeout: number; maxBuffer?: number }
 ) => Promise<{ stdout: string }>
 export function createMacPlatform(run: CommandRunner = exec): Platform {
+  const readInfoPlist = async (plist: string): Promise<BundleInfo> => {
+    const { stdout } = await run('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plist], {
+      timeout: 5000,
+      maxBuffer: 2 * 1024 * 1024
+    })
+    const info = JSON.parse(stdout) as Record<string, unknown>
+    const str = (key: string) =>
+      typeof info[key] === 'string' && info[key] ? String(info[key]) : null
+    return {
+      bundleId: str('CFBundleIdentifier'),
+      name: str('CFBundleDisplayName') ?? str('CFBundleName'),
+      names: [
+        ...new Set(
+          [str('CFBundleDisplayName'), str('CFBundleName')].filter(
+            (value): value is string => value !== null
+          )
+        )
+      ]
+    }
+  }
   return {
     async measureBundle(path) {
       // Native package accounting only: no candidate discovery or helper indexing
@@ -69,28 +90,28 @@ export function createMacPlatform(run: CommandRunner = exec): Platform {
     },
     async readBundleInfo(path) {
       try {
-        const { stdout } = await run(
-          '/usr/bin/plutil',
-          ['-convert', 'json', '-o', '-', `${path}/Contents/Info.plist`],
-          { timeout: 5000, maxBuffer: 2 * 1024 * 1024 }
-        )
-        const info = JSON.parse(stdout) as Record<string, unknown>
-        const str = (key: string) =>
-          typeof info[key] === 'string' && info[key] ? String(info[key]) : null
-        return {
-          bundleId: str('CFBundleIdentifier'),
-          name: str('CFBundleDisplayName') ?? str('CFBundleName'),
-          names: [
-            ...new Set(
-              [str('CFBundleDisplayName'), str('CFBundleName')].filter(
-                (value): value is string => value !== null
-              )
-            )
-          ]
-        }
+        return await readInfoPlist(join(path, 'Contents/Info.plist'))
       } catch {
-        // An unreadable bundle stays visible, but can never own data or be removed.
-        return { bundleId: null, name: null }
+        // iOS apps on macOS have a physical inner bundle and a relative link to it.
+        // Read only that inner root plist; never follow arbitrary package links.
+        try {
+          const target = await readlink(join(path, 'WrappedBundle'))
+          if (!/^Wrapper\/[^/]+\.app$/.test(target)) throw new Error('Invalid wrapped bundle link.')
+          const wrapper = join(path, 'Wrapper')
+          const wrapped = join(path, target)
+          const plist = join(wrapped, 'Info.plist')
+          const [wrapperStat, wrappedStat, plistStat] = await Promise.all([
+            lstat(wrapper),
+            lstat(wrapped),
+            lstat(plist)
+          ])
+          if (!wrapperStat.isDirectory() || !wrappedStat.isDirectory() || !plistStat.isFile())
+            throw new Error('Wrapped bundle metadata must be a regular file inside the package.')
+          return await readInfoPlist(plist)
+        } catch {
+          // An unreadable or unrecognized bundle stays visible but protected.
+          return { bundleId: null, name: null }
+        }
       }
     },
     async lastOpened(path) {
