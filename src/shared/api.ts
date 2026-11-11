@@ -68,6 +68,7 @@ export interface ReviewRequest {
   scanId: string
   itemIds: string[]
   appId?: string
+  allowProtectedItemIds?: string[]
 }
 export interface RemovalPlan {
   id: string

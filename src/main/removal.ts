@@ -26,6 +26,7 @@ interface StoredPlan {
   scanId: string
   appId?: string
   itemIds: string[]
+  allowProtectedItemIds: string[]
 }
 export interface FinderRetry {
   approve(path: string): Promise<boolean>
@@ -68,13 +69,13 @@ export class RemovalService {
     if (!record) throw new Error('Unknown scan item. Rescan and select the items again.')
     return record
   }
-  private allowed(record: InternalItem, app?: InstalledApp): void {
+  private allowed(record: InternalItem, app?: InstalledApp, allowProtected = false): void {
     const item = record.view,
       path = resolve(item.path),
       relatedForApp = !!app && reviewableRelatedPath(item, app)
     if (
       path !== item.path ||
-      (item.protected && !relatedForApp) ||
+      (item.protected && !relatedForApp && !allowProtected) ||
       item.confidence === 'shared' ||
       (item.confidence === 'related' && !relatedForApp) ||
       item.ownerIds.length > 1
@@ -106,9 +107,21 @@ export class RemovalService {
         throw new Error('Selection does not belong to this removable app.')
     } else if (item.ownerIds.length)
       throw new Error('Installed application data must be reviewed with its app.')
+    if (
+      allowProtected &&
+      (!item.protected ||
+        item.category === 'bundle' ||
+        item.partial ||
+        !['uncertain', 'unmatched'].includes(item.confidence))
+    )
+      throw new Error(`Protected override is not allowed for this item: ${item.path}`)
   }
-  private async validate(record: InternalItem, app?: InstalledApp): Promise<void> {
-    this.allowed(record, app)
+  private async validate(
+    record: InternalItem,
+    app?: InstalledApp,
+    allowProtected = false
+  ): Promise<void> {
+    this.allowed(record, app, allowProtected)
     const stat = await assertNoSymlink(record.view.path)
     if ((!stat.isFile() && !stat.isDirectory()) || !sameIdentity(record.identity, identity(stat)))
       throw new Error(`Item identity changed. Rescan: ${record.view.path}`)
@@ -143,7 +156,11 @@ export class RemovalService {
       request.itemIds.length > 500 ||
       request.itemIds.some((id) => typeof id !== 'string') ||
       new Set(request.itemIds).size !== request.itemIds.length ||
-      (request.appId !== undefined && typeof request.appId !== 'string')
+      (request.appId !== undefined && typeof request.appId !== 'string') ||
+      (request.allowProtectedItemIds !== undefined &&
+        (!Array.isArray(request.allowProtectedItemIds) ||
+          request.allowProtectedItemIds.some((id) => typeof id !== 'string') ||
+          new Set(request.allowProtectedItemIds).size !== request.allowProtectedItemIds.length))
     )
       throw new Error('Select valid scan items for review.')
     const snapshot = this.current(request.scanId)
@@ -152,9 +169,11 @@ export class RemovalService {
       : undefined
     if (request.appId && !app) throw new Error('Unknown application.')
     const records = request.itemIds.map((id) => this.resolveItem(snapshot, id))
-    records.forEach((record) => this.allowed(record, app))
+    const allowProtected = new Set(request.allowProtectedItemIds ?? [])
+    records.forEach((record) => this.allowed(record, app, allowProtected.has(record.view.id)))
     if (app) await this.validateOwner(snapshot, app)
-    for (const record of records) await this.validate(record, app)
+    for (const record of records)
+      await this.validate(record, app, allowProtected.has(record.view.id))
     this.current(request.scanId)
     if (this.busy) throw new Error('A removal is already in progress.')
     this.plans.clear()
@@ -169,7 +188,8 @@ export class RemovalService {
       view,
       scanId: snapshot.view.id,
       appId: app?.id,
-      itemIds: records.map((record) => record.view.id)
+      itemIds: records.map((record) => record.view.id),
+      allowProtectedItemIds: [...allowProtected]
     })
     return view
   }
@@ -188,7 +208,10 @@ export class RemovalService {
         .sort((a, b) => Number(b.view.category === 'bundle') - Number(a.view.category === 'bundle'))
       // Preflight the entire selection before any Trash operation.
       if (app) await this.validateOwner(snapshot, app)
-      for (const record of records) await this.validate(record, app)
+      for (const record of records)
+        this.allowed(record, app, plan.allowProtectedItemIds.includes(record.view.id))
+      for (const record of records)
+        await this.validate(record, app, plan.allowProtectedItemIds.includes(record.view.id))
       const results: RemovalResult[] = []
       let bundleTrashed = false,
         stop = false
@@ -207,13 +230,13 @@ export class RemovalService {
           // Repeat immediately before every mutation; a review is never authorization for a changed path.
           this.current(plan.scanId)
           // Recursive validation can take time. Check running state after it, close to Trash.
-          await this.validate(record, app)
+          await this.validate(record, app, plan.allowProtectedItemIds.includes(record.view.id))
           if (app) {
             if (!bundleTrashed) await this.validateOwner(snapshot, app)
             else if (await this.platform.isRunning(app.path))
               throw new Error(`Quit ${app.name} before removing its data.`)
           }
-          this.allowed(record, app)
+          this.allowed(record, app, plan.allowProtectedItemIds.includes(record.view.id))
           const finalStat = await assertNoSymlink(item.path)
           if (!sameIdentity(record.identity, identity(finalStat)))
             throw new Error(`Item identity changed. Rescan: ${item.path}`)
@@ -230,7 +253,7 @@ export class RemovalService {
             // The user may spend time in the dialog. Check the same scan identity
             // and ownership again before handing this path to Finder.
             this.current(plan.scanId)
-            await this.validate(record, app)
+            await this.validate(record, app, plan.allowProtectedItemIds.includes(record.view.id))
             if (app) {
               if (!bundleTrashed) await this.validateOwner(snapshot, app)
               else if (await this.platform.isRunning(app.path))

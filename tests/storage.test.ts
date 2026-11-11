@@ -149,6 +149,17 @@ describe('scanner and conservative ownership', () => {
     expect(result.view.apps.map((app) => app.name).sort()).toEqual(['Acme', 'Built in', 'Nested'])
     expect(result.view.apps.find((app) => app.name === 'Built in')?.protected).toBe(true)
   })
+  it('does not protect Safari Web Apps as Apple system applications', async () => {
+    await bundle('Saved Site', 'com.apple.Safari.WebApp.fixture')
+    await data('com.apple.Safari.WebApp.fixture')
+    const result = await scan(config, platform)
+    const app = result.view.apps.find((entry) => entry.name === 'Saved Site')!
+    const dataItem = result.view.items.find(
+      (entry) => entry.name === 'com.apple.Safari.WebApp.fixture'
+    )!
+    expect(app.protected).toBe(false)
+    expect(dataItem.protected).toBe(false)
+  })
   it('reserves confirmed ownership for exact IDs and derives protected names from metadata', async () => {
     await bundle('Acme')
     const codePath = await bundle('Visual Studio Code', 'com.microsoft.VSCode')
@@ -1023,6 +1034,21 @@ describe('removal review, confirmation and revalidation', () => {
     })
     expect(plan.appName).toBeNull()
     expect(trash).not.toHaveBeenCalled()
+    expect((await service.confirm(plan.id))[0]?.status).toBe('trashed')
+    expect(trash).toHaveBeenCalledOnce()
+  })
+  it('allows an explicit protected leftover override', async () => {
+    await data('com.apple.Safari.WebApp')
+    const snapshot = await scan(config, platform),
+      trash = vi.fn(async () => {})
+    const service = new RemovalService(config, platform, trash)
+    service.setSnapshot(snapshot)
+    const item = snapshot.view.items.find((entry) => entry.name === 'com.apple.Safari.WebApp')!
+    const plan = await service.review({
+      scanId: snapshot.view.id,
+      itemIds: [item.id],
+      allowProtectedItemIds: [item.id]
+    })
     expect((await service.confirm(plan.id))[0]?.status).toBe('trashed')
     expect(trash).toHaveBeenCalledOnce()
   })

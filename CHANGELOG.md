@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.1-beta.1
+
+- Allow Safari Web Apps saved from websites to be removed like ordinary user applications.
+
 ## 1.4.0-beta.1
 
 - Show each installed application's native macOS icon beside its name.
