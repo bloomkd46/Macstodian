@@ -351,7 +351,7 @@ export function App() {
             <HardDrive size={22} />
           </div>
           <div>
-            Macstodian<small>A little room to breathe.</small>
+            Macstodian<small>The custodian for your Mac</small>
           </div>
         </div>
         <div className="nav-label">YOUR STORAGE</div>
