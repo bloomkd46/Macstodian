@@ -881,6 +881,10 @@ input[type='checkbox']:disabled:checked::after {
   margin: 15px 0 0 31px;
   border-top: 1px solid var(--border-soft);
 }
+.group-paths .group-size-breakdown {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+}
 .group-path {
   padding: 13px 0;
 }

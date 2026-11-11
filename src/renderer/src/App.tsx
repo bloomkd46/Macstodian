@@ -1235,7 +1235,11 @@ const LeftoverGroupRow = memo(function LeftoverGroupRow({
               <span className="badge amber">Uncertain owner</span>
             )}
             {protectedCount > 0 && <span className="badge">{protectedCount} protected</span>}
-            <strong>{formatBytes(group.bytes)}</strong>
+            <strong
+              title={`${group.bytes.toLocaleString()} bytes across ${group.items.length} paths`}
+            >
+              {formatBytes(group.bytes)} total
+            </strong>
           </div>
           <p className="group-categories">
             {[...new Set(group.items.map((item) => categoryNames[item.category]))].join(' · ')}
@@ -1245,6 +1249,11 @@ const LeftoverGroupRow = memo(function LeftoverGroupRow({
       </div>
       {open && (
         <div className="group-paths">
+          <p className="group-size-breakdown">
+            {group.items.length <= 3
+              ? `${group.items.map((item) => formatBytes(item.bytes)).join(' + ')} ≈ ${formatBytes(group.bytes)} total`
+              : `${group.bytes.toLocaleString()} bytes total across ${group.items.length} paths`}
+          </p>
           {group.items.map((item) => (
             <div className="group-path" key={item.id}>
               <label>

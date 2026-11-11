@@ -239,7 +239,7 @@ try {
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   await page.getByRole('button', { name: /^Leftovers/ }).click()
   await expect(page.locator('article.leftover')).toHaveCount(1)
-  await expect(page.locator('.leftover-title > strong')).toHaveText('60 B')
+  await expect(page.locator('.leftover-title > strong')).toHaveText('60 B total')
   await expect(page.locator('.leftover-title')).toContainText('2 paths')
   const newestGroupDate = await page.evaluate(() =>
     new Date(Date.UTC(2025, 0, 4, 12)).toLocaleDateString(undefined, {
@@ -254,13 +254,14 @@ try {
   await checkAppearance('dark', 'leftovers', ['.leftover-list'])
   await page.getByRole('button', { name: 'Details for orphan' }).click()
   await expect(page.locator('.group-path')).toHaveCount(2)
+  await expect(page.locator('.group-size-breakdown')).toHaveText('45 B + 15 B ≈ 60 B total')
   await expect(page.locator('.group-path')).toContainText([
     '/fixture/Library/Application Support/orphan',
     '/fixture/Library/Preferences/orphan'
   ])
   await page.getByRole('textbox', { name: 'Search leftovers' }).fill('Preferences/orphan')
   await expect(page.locator('article.leftover')).toHaveCount(1)
-  await expect(page.locator('.leftover-title > strong')).toHaveText('60 B')
+  await expect(page.locator('.leftover-title > strong')).toHaveText('60 B total')
   await expect(page.locator('.group-path')).toHaveCount(2)
   await page.getByRole('textbox', { name: 'Search leftovers' }).fill('')
   await page.getByRole('checkbox', { name: 'Select /fixture/Library/Preferences/orphan' }).check()
