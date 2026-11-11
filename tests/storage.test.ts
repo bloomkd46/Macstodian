@@ -26,6 +26,7 @@ import {
 } from '../src/main/platform'
 import { scan, measure, type ScanConfig } from '../src/main/scanner'
 import { RemovalService } from '../src/main/removal'
+import { isPermissionError, trashWithFinder } from '../src/main/finder-trash'
 
 let root: string, config: ScanConfig, platform: Platform
 async function file(path: string, text = 'data') {
@@ -868,7 +869,139 @@ describe('removal review, confirmation and revalidation', () => {
     expect(results.map((result) => result.status)).toEqual(['trashed', 'trashed'])
     expect(trash.mock.calls[0]?.[0]).toBe(appPath)
     await expect(service.confirm(plan.id)).rejects.toThrow('expired')
-    await expect(service.review(request)).rejects.toThrow('Stale')
+    await expect(service.review(request)).rejects.toThrow('moved to Trash')
+  })
+  it('keeps unchanged apps reviewable after another app is moved to Trash', async () => {
+    await bundle('Acme', 'dev.acme.Editor')
+    await bundle('Second', 'dev.second.App')
+    await bundle('Third', 'dev.third.App')
+    const snapshot = await scan(config, platform)
+    const trash = vi.fn(async (_path: string) => {})
+    const service = new RemovalService(config, platform, trash)
+    service.setSnapshot(snapshot)
+    const first = snapshot.view.apps.find((app) => app.name === 'Acme')!
+    const second = snapshot.view.apps.find((app) => app.name === 'Second')!
+    const third = snapshot.view.apps.find((app) => app.name === 'Third')!
+    const review = (app: typeof first) =>
+      service.review({ scanId: snapshot.view.id, appId: app.id, itemIds: [app.bundleItemId] })
+    expect((await service.confirm((await review(first)).id))[0]?.status).toBe('trashed')
+    await expect(review(first)).rejects.toThrow('moved to Trash')
+    await expect(service.reveal(snapshot.view.id, first.bundleItemId)).rejects.toThrow(
+      'moved to Trash'
+    )
+    await file(join(third.path, 'Contents/MacOS/app'), 'changed since scanning')
+    await expect(review(third)).rejects.toThrow('changed since scanning')
+    expect((await service.confirm((await review(second)).id))[0]?.status).toBe('trashed')
+    expect(trash).toHaveBeenCalledTimes(2)
+  })
+  it('allows a failed permission attempt to be reviewed again without rescanning', async () => {
+    const { service, trash, request } = await setup()
+    trash.mockRejectedValueOnce(new Error('EACCES: permission denied'))
+    const result = await service.confirm((await service.review(request)).id)
+    expect(result.map((item) => item.status)).toEqual(['failed', 'skipped'])
+    expect(result[0]?.message).toContain('permission denied')
+    const retry = await service.review(request)
+    expect((await service.confirm(retry.id)).every((item) => item.status === 'trashed')).toBe(true)
+  })
+  it('offers Finder only for a permission failure and revalidates after approval', async () => {
+    const { snapshot, app, request } = await setup()
+    const trash = vi.fn(async () => {
+      const error = new Error('Operation not permitted') as NodeJS.ErrnoException
+      error.code = 'EPERM'
+      throw error
+    })
+    const approve = vi.fn(async () => true)
+    const finderTrash = vi.fn(async () => {})
+    const service = new RemovalService(config, platform, trash, {
+      approve,
+      trash: finderTrash
+    })
+    service.setSnapshot(snapshot)
+    const result = await service.confirm(
+      (
+        await service.review({
+          ...request,
+          itemIds: [app.bundleItemId]
+        })
+      ).id
+    )
+    expect(result[0]).toMatchObject({ status: 'trashed' })
+    expect(result[0]?.message).toContain('with Finder')
+    expect(approve).toHaveBeenCalledWith(app.path)
+    expect(finderTrash).toHaveBeenCalledWith(app.path)
+  })
+  it('leaves a declined Finder retry failed and does not offer unrelated errors', async () => {
+    const { snapshot, app, request } = await setup()
+    const trash = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('EACCES: permission denied'))
+      .mockRejectedValueOnce(new Error('Item not found'))
+    const approve = vi.fn(async () => false)
+    const finderTrash = vi.fn()
+    const service = new RemovalService(config, platform, trash, { approve, trash: finderTrash })
+    service.setSnapshot(snapshot)
+    const review = () => service.review({ ...request, itemIds: [app.bundleItemId] })
+    expect((await service.confirm((await review()).id))[0]?.status).toBe('failed')
+    expect((await service.confirm((await review()).id))[0]?.status).toBe('failed')
+    expect(approve).toHaveBeenCalledTimes(1)
+    expect(finderTrash).not.toHaveBeenCalled()
+  })
+  it('does not give Finder a path changed while the permission dialog was open', async () => {
+    const { snapshot, app, request } = await setup()
+    const trash = vi.fn().mockRejectedValue(new Error('EACCES: permission denied'))
+    const approve = vi.fn(async () => {
+      await file(join(app.path, 'Contents/new-file'), 'changed while waiting')
+      return true
+    })
+    const finderTrash = vi.fn()
+    const service = new RemovalService(config, platform, trash, { approve, trash: finderTrash })
+    service.setSnapshot(snapshot)
+    const result = await service.confirm(
+      (
+        await service.review({
+          ...request,
+          itemIds: [app.bundleItemId]
+        })
+      ).id
+    )
+    expect(result[0]).toMatchObject({ status: 'failed' })
+    expect(result[0]?.message).toContain('changed since scanning')
+    expect(finderTrash).not.toHaveBeenCalled()
+  })
+  it('keeps a Finder retry failure visible and leaves app data untouched', async () => {
+    const { snapshot, request } = await setup()
+    const trash = vi.fn().mockRejectedValue(new Error('EACCES: permission denied'))
+    const approve = vi.fn(async () => true)
+    const finderTrash = vi.fn().mockRejectedValue(new Error('Finder access denied'))
+    const service = new RemovalService(config, platform, trash, { approve, trash: finderTrash })
+    service.setSnapshot(snapshot)
+    const results = await service.confirm((await service.review(request)).id)
+    expect(results.map((result) => result.status)).toEqual(['failed', 'skipped'])
+    expect(results[0]?.message).toContain('Finder access denied')
+    expect(finderTrash).toHaveBeenCalledTimes(1)
+  })
+  it('passes Finder paths as arguments without shell interpolation', async () => {
+    const run = vi.fn(async () => ({ stdout: '' }))
+    const path = '/tmp/quote " and $(touch nope).txt'
+    await trashWithFinder(path, run)
+    expect(run).toHaveBeenCalledWith(
+      '/usr/bin/osascript',
+      [
+        '-e',
+        'on run argv',
+        '-e',
+        'set targetFile to (POSIX file (item 1 of argv)) as alias',
+        '-e',
+        'tell application "Finder" to move targetFile to trash',
+        '-e',
+        'end run',
+        path
+      ],
+      expect.objectContaining({ timeout: 120000 })
+    )
+    expect(isPermissionError(Object.assign(new Error('denied'), { code: 'EACCES' }))).toBe(true)
+    expect(isPermissionError(new Error("You don't have permission to move this item"))).toBe(true)
+    expect(isPermissionError(new Error('missing file'))).toBe(false)
   })
   it('stops before all app data if trashing the bundle fails', async () => {
     const { service, trash, request } = await setup()

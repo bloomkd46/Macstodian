@@ -41,7 +41,7 @@ corepack yarn package       # local unsigned .app under release/mac-arm64 (or ma
 corepack yarn dist          # local unsigned DMG under release/
 ```
 
-`verify:mac` requires a logged-in macOS desktop session. It checks both tabs, progress, sorting, search, expanded paths, review defaults, and the leftover confirmation screen. It never confirms removal, and a development guard disables Trash. Screenshots and reports go to `verification/` (gitignored). Fixture UI tests separately exercise confirmation, failures, per-item outcomes, running-app rejection, and automatic refresh.
+`verify:mac` requires a logged-in macOS desktop session. It checks both tabs, progress, sorting, search, expanded paths, review defaults, and the leftover confirmation screen. It never confirms removal, and a development guard disables Trash. Screenshots and reports go to `verification/` (gitignored). Fixture UI tests separately exercise confirmation, failures, per-item outcomes, running-app rejection, and the optional rescan prompt after removal.
 
 ## Release unsigned builds
 

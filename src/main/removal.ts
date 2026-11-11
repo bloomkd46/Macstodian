@@ -8,6 +8,7 @@ import {
   type ReviewRequest
 } from '../shared/api'
 import type { Platform } from './platform'
+import { isPermissionError } from './finder-trash'
 import {
   assertNoSymlink,
   errorText,
@@ -26,21 +27,34 @@ interface StoredPlan {
   appId?: string
   itemIds: string[]
 }
+export interface FinderRetry {
+  approve(path: string): Promise<boolean>
+  trash(path: string): Promise<void>
+}
 export class RemovalService {
   private plans = new Map<string, StoredPlan>()
   private snapshot: InternalScan | null = null
+  private trashedIds = new Set<string>()
   private busy = false
   private config: ScanConfig
   private platform: Platform
   private trash: (path: string) => Promise<void>
-  constructor(config: ScanConfig, platform: Platform, trash: (path: string) => Promise<void>) {
+  private finderRetry?: FinderRetry
+  constructor(
+    config: ScanConfig,
+    platform: Platform,
+    trash: (path: string) => Promise<void>,
+    finderRetry?: FinderRetry
+  ) {
     this.config = config
     this.platform = platform
     this.trash = trash
+    this.finderRetry = finderRetry
   }
   setSnapshot(snapshot: InternalScan | null) {
     this.snapshot = snapshot
     this.plans.clear()
+    this.trashedIds.clear()
   }
   private current(scanId: string): InternalScan {
     if (!this.snapshot || this.snapshot.view.id !== scanId)
@@ -48,6 +62,8 @@ export class RemovalService {
     return this.snapshot
   }
   private resolveItem(snapshot: InternalScan, id: string): InternalItem {
+    if (this.trashedIds.has(id))
+      throw new Error('Item was moved to Trash. Rescan before using it again.')
     const record = snapshot.records.get(id)
     if (!record) throw new Error('Unknown scan item. Rescan and select the items again.')
     return record
@@ -201,13 +217,35 @@ export class RemovalService {
           const finalStat = await assertNoSymlink(item.path)
           if (!sameIdentity(record.identity, identity(finalStat)))
             throw new Error(`Item identity changed. Rescan: ${item.path}`)
-          await this.trash(item.path)
+          let usedFinder = false
+          try {
+            await this.trash(item.path)
+          } catch (error) {
+            if (
+              !isPermissionError(error) ||
+              !this.finderRetry ||
+              !(await this.finderRetry.approve(item.path))
+            )
+              throw error
+            // The user may spend time in the dialog. Check the same scan identity
+            // and ownership again before handing this path to Finder.
+            this.current(plan.scanId)
+            await this.validate(record, app)
+            if (app) {
+              if (!bundleTrashed) await this.validateOwner(snapshot, app)
+              else if (await this.platform.isRunning(app.path))
+                throw new Error(`Quit ${app.name} before removing its data.`)
+            }
+            await this.finderRetry.trash(item.path)
+            usedFinder = true
+          }
+          this.trashedIds.add(item.id)
           if (item.category === 'bundle') bundleTrashed = true
           results.push({
             itemId: item.id,
             path: item.path,
             status: 'trashed',
-            message: 'Moved to Trash. Storage becomes available after Trash is emptied.'
+            message: `Moved to Trash${usedFinder ? ' with Finder' : ''}. Storage becomes available after Trash is emptied.`
           })
         } catch (error) {
           results.push({
@@ -219,8 +257,9 @@ export class RemovalService {
           if (item.category === 'bundle') stop = true
         }
       }
-      // Any attempted mutation invalidates all old IDs and reviews.
-      this.setSnapshot(null)
+      // Keep unaffected scan items available; each subsequent review revalidates
+      // the item and app. Successful Trash items cannot be selected again.
+      this.plans.clear()
       return results
     } finally {
       this.busy = false
