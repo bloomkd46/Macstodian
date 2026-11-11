@@ -17,8 +17,8 @@ const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#141a17' : '#
 async function loadBundleIcon(bundlePath: string): Promise<string | null> {
   try {
     const thumbnail = await nativeImage.createThumbnailFromPath(bundlePath, {
-      width: 32,
-      height: 32
+      width: 40,
+      height: 40
     })
     if (thumbnail.isEmpty()) return null
     return `data:image/png;base64,${thumbnail.toPNG().toString('base64')}`
