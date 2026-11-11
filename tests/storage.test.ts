@@ -149,6 +149,17 @@ describe('scanner and conservative ownership', () => {
     expect(result.view.apps.map((app) => app.name).sort()).toEqual(['Acme', 'Built in', 'Nested'])
     expect(result.view.apps.find((app) => app.name === 'Built in')?.protected).toBe(true)
   })
+  it('does not protect Safari Web Apps as Apple system applications', async () => {
+    await bundle('Saved Site', 'com.apple.Safari.WebApp.fixture')
+    await data('com.apple.Safari.WebApp.fixture')
+    const result = await scan(config, platform)
+    const app = result.view.apps.find((entry) => entry.name === 'Saved Site')!
+    const dataItem = result.view.items.find(
+      (entry) => entry.name === 'com.apple.Safari.WebApp.fixture'
+    )!
+    expect(app.protected).toBe(false)
+    expect(dataItem.protected).toBe(false)
+  })
   it('reserves confirmed ownership for exact IDs and derives protected names from metadata', async () => {
     await bundle('Acme')
     const codePath = await bundle('Visual Studio Code', 'com.microsoft.VSCode')

@@ -71,6 +71,8 @@ const isVolatileDirectory = (name: string) =>
   /^(caches?|logs?|gpucache|code cache|cachestorage|shadercache|dawncache|grshadercache)$/i.test(
     name
   )
+const isSafariWebApp = (bundleId: string | null) =>
+  /^com\.apple\.safari\.webapp(?:\.|$)/i.test(bundleId ?? '')
 
 // lstat every ancestor, including the target. realpath alone would silently accept links.
 export async function assertNoSymlink(path: string): Promise<Stats> {
@@ -253,7 +255,7 @@ export async function scan(
       const protectedApp =
         !info.bundleId ||
         config.systemRoots.some((root) => isInside(path, root)) ||
-        !!info.bundleId?.startsWith('com.apple.')
+        (!!info.bundleId?.startsWith('com.apple.') && !isSafariWebApp(info.bundleId))
       if (!info.bundleId)
         skip(
           join(path, 'Contents/Info.plist'),

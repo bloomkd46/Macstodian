@@ -1,6 +1,6 @@
 {
   "name": "macstodian",
-  "version": "1.4.0-beta.1",
+  "version": "1.4.1-beta.1",
   "private": true,
   "description": "A local, conservative macOS storage inspector",
   "main": "out/main/index.js",
