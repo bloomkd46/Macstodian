@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0-beta.1
+
+- Change the sidebar tagline to "The custodian for your Mac".
+- Clarify that grouped leftover sizes are totals across their paths.
+
 ## 1.0.1-beta.3
 
 - Make GitHub release notes match the changelog entries added for the release.
