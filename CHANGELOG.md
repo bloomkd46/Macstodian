@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.1-beta.2
+
+- Allow holding Option to explicitly select protected leftover paths, with a warning shown before moving them to Trash.
+
 ## 1.4.1-beta.1
 
 - Allow Safari Web Apps saved from websites to be removed like ordinary user applications.
