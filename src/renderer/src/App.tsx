@@ -142,7 +142,33 @@ export function App() {
   const [plan, setPlan] = useState<RemovalPlan | null>(null)
   const [results, setResults] = useState<RemovalResult[] | null>(null)
   const [outcomes, setOutcomes] = useState(new Map<string, RemovalResult>())
+  const [appIcons, setAppIcons] = useState<Record<string, string | null>>({})
   const items = useMemo(() => new Map(snapshot?.items.map((item) => [item.id, item])), [snapshot])
+  useEffect(() => {
+    let active = true
+    if (!snapshot) {
+      setAppIcons({})
+      return () => {
+        active = false
+      }
+    }
+    setAppIcons({})
+    const loadIcons = async () => {
+      const ids = snapshot.apps.map((app) => app.id)
+      for (let index = 0; index < ids.length && active; index += 16) {
+        try {
+          const icons = await window.macstodian.getAppIcons(ids.slice(index, index + 16))
+          if (active) setAppIcons((current) => ({ ...current, ...icons }))
+        } catch {
+          // The placeholder remains visible when native icon lookup is unavailable.
+        }
+      }
+    }
+    void loadIcons()
+    return () => {
+      active = false
+    }
+  }, [snapshot])
   const appNames = useMemo(
     () => new Map(snapshot?.apps.map((app) => [app.id, app.name])),
     [snapshot]
@@ -681,6 +707,7 @@ export function App() {
                         key={app.id}
                         app={app}
                         open={expanded.has(app.id)}
+                        icon={appIcons[app.id] ?? null}
                         busy={!!busy}
                         items={items}
                         outcomes={outcomes}
@@ -1078,6 +1105,7 @@ const SortHeader = memo(function SortHeader({
 })
 const AppRows = memo(function AppRows({
   app,
+  icon,
   open,
   busy,
   items,
@@ -1088,6 +1116,7 @@ const AppRows = memo(function AppRows({
   onReveal
 }: {
   app: InstalledApp
+  icon: string | null
   open: boolean
   busy: boolean
   items: Map<string, ScanItem>
@@ -1114,8 +1143,8 @@ const AppRows = memo(function AppRows({
             onClick={() => onToggle(app.id)}
           >
             {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-            <span className="app-icon">
-              <AppWindow size={21} />
+            <span className={`app-icon${icon ? ' app-icon-image' : ''}`}>
+              {icon ? <img src={icon} alt="" draggable={false} /> : <AppWindow size={21} />}
             </span>
             <span>
               <strong>{app.name}</strong>

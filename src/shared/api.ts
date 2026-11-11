@@ -84,6 +84,7 @@ export interface RemovalResult {
 }
 export interface MacstodianAPI {
   scan(): Promise<ScanSnapshot>
+  getAppIcons(appIds: string[]): Promise<Record<string, string | null>>
   onProgress(callback: (progress: ScanProgress) => void): () => void
   review(request: ReviewRequest): Promise<RemovalPlan>
   confirm(planId: string): Promise<RemovalResult[]>
