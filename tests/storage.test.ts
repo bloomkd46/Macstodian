@@ -986,7 +986,17 @@ describe('removal review, confirmation and revalidation', () => {
     await trashWithFinder(path, run)
     expect(run).toHaveBeenCalledWith(
       '/usr/bin/osascript',
-      expect.arrayContaining([path]),
+      [
+        '-e',
+        'on run argv',
+        '-e',
+        'set targetFile to (POSIX file (item 1 of argv)) as alias',
+        '-e',
+        'tell application "Finder" to move targetFile to trash',
+        '-e',
+        'end run',
+        path
+      ],
       expect.objectContaining({ timeout: 120000 })
     )
     expect(isPermissionError(Object.assign(new Error('denied'), { code: 'EACCES' }))).toBe(true)

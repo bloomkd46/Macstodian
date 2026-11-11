@@ -28,7 +28,9 @@ export async function trashWithFinder(path: string, run: FinderCommand = exec): 
       '-e',
       'on run argv',
       '-e',
-      'tell application "Finder" to move (POSIX file (item 1 of argv)) to trash',
+      'set targetFile to (POSIX file (item 1 of argv)) as alias',
+      '-e',
+      'tell application "Finder" to move targetFile to trash',
       '-e',
       'end run',
       path
