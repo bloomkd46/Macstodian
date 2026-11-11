@@ -137,6 +137,8 @@ export function App() {
   })
   const [expanded, setExpanded] = useState(new Set<string>())
   const [selected, setSelected] = useState(new Set<string>())
+  const [protectedOverrides, setProtectedOverrides] = useState(new Set<string>())
+  const [optionHeld, setOptionHeld] = useState(false)
   const [reviewApp, setReviewApp] = useState<InstalledApp | null>(null)
   const [appSelection, setAppSelection] = useState(new Set<string>())
   const [plan, setPlan] = useState<RemovalPlan | null>(null)
@@ -144,6 +146,18 @@ export function App() {
   const [outcomes, setOutcomes] = useState(new Map<string, RemovalResult>())
   const [appIcons, setAppIcons] = useState<Record<string, string | null>>({})
   const items = useMemo(() => new Map(snapshot?.items.map((item) => [item.id, item])), [snapshot])
+  useEffect(() => {
+    const update = (event: KeyboardEvent) => setOptionHeld(event.altKey)
+    const clear = () => setOptionHeld(false)
+    window.addEventListener('keydown', update)
+    window.addEventListener('keyup', update)
+    window.addEventListener('blur', clear)
+    return () => {
+      window.removeEventListener('keydown', update)
+      window.removeEventListener('keyup', update)
+      window.removeEventListener('blur', clear)
+    }
+  }, [])
   useEffect(() => {
     let active = true
     if (!snapshot) {
@@ -259,10 +273,18 @@ export function App() {
       })
   }, [displayGroups, query, leftoverSort])
   const visibleLeftoverPaths = visibleGroups.reduce((total, group) => total + group.items.length, 0)
-  const toggleSelected = useCallback(
-    (id: string) => setSelected((values) => toggle(values, id)),
-    []
-  )
+  const toggleSelected = useCallback((id: string, override = false) => {
+    setSelected((values) => {
+      const next = toggle(values, id)
+      setProtectedOverrides((overrides) => {
+        const updated = new Set(overrides)
+        if (next.has(id) && override) updated.add(id)
+        else updated.delete(id)
+        return updated
+      })
+      return next
+    })
+  }, [])
   const toggleGroupSelected = useCallback((ids: string[]) => {
     setSelected((values) => {
       const next = new Set(values)
@@ -286,6 +308,7 @@ export function App() {
     setError('')
     setProgress(null)
     setSelected(new Set())
+    setProtectedOverrides(new Set())
     setExpanded(new Set())
     setReviewApp(null)
     setPlan(null)
@@ -324,7 +347,10 @@ export function App() {
         await window.macstodian.review({
           scanId: snapshot.id,
           itemIds: [...ids],
-          ...(app ? { appId: app.id } : {})
+          ...(app ? { appId: app.id } : {}),
+          ...(app
+            ? {}
+            : { allowProtectedItemIds: [...protectedOverrides].filter((id) => ids.has(id)) })
         })
       )
       setReviewApp(null)
@@ -731,7 +757,7 @@ export function App() {
                     Unmatched does not mean unused. Exact bundle IDs identify owners. Possible name
                     and helper associations appear under app details and in displayed app sizes.
                     Uniquely linked paths can be chosen in that app’s removal review; shared and
-                    protected leftovers cannot be selected here.
+                    protected leftovers require holding Option while selecting.
                   </span>
                 </div>
                 <div className="leftover-list">
@@ -744,6 +770,8 @@ export function App() {
                         busy={!!busy}
                         outcome={outcomes.get(group.items[0]!.id)}
                         onToggle={toggleSelected}
+                        optionHeld={optionHeld}
+                        overridden={protectedOverrides.has(group.items[0]!.id)}
                         onReveal={reveal}
                       />
                     ) : (
@@ -756,6 +784,8 @@ export function App() {
                         onToggleGroup={toggleGroupSelected}
                         onReveal={reveal}
                         selected={selected}
+                        optionHeld={optionHeld}
+                        overridden={protectedOverrides}
                       />
                     )
                   )}
@@ -773,7 +803,13 @@ export function App() {
                       <strong>{selected.size}</strong> selected · {formatBytes(selectedBytes)}{' '}
                       estimated
                     </span>
-                    <button disabled={!!busy} onClick={() => setSelected(new Set())}>
+                    <button
+                      disabled={!!busy}
+                      onClick={() => {
+                        setSelected(new Set())
+                        setProtectedOverrides(new Set())
+                      }}
+                    >
                       Clear selection
                     </button>
                     <button
@@ -890,7 +926,13 @@ export function App() {
             <div className="review-paths">
               {plan
                 ? plan.items.map((item) => (
-                    <PathItem item={item} key={item.id} busy={!!busy} onReveal={reveal} />
+                    <PathItem
+                      item={item}
+                      key={item.id}
+                      busy={!!busy}
+                      onReveal={reveal}
+                      emphasizeProtected
+                    />
                   ))
                 : ['bundle', 'cache', 'data', 'related', 'shared'].map((group) => {
                     const groupItems = reviewItems.filter((item) =>
@@ -1030,20 +1072,26 @@ const PathItem = memo(function PathItem({
   item,
   outcome,
   busy,
-  onReveal
+  onReveal,
+  emphasizeProtected = false
 }: {
   item: ScanItem
   outcome?: RemovalResult
   busy: boolean
   onReveal: (item: ScanItem) => void
+  emphasizeProtected?: boolean
 }) {
+  const protectedItem = emphasizeProtected && item.protected
   return (
-    <div className={`path-item${outcome ? ` outcome-${outcome.status}` : ''}`}>
+    <div
+      className={`path-item${outcome ? ` outcome-${outcome.status}` : ''}${protectedItem ? ' protected-path' : ''}`}
+    >
       <div className="path-top">
         <span className="category">
           {item.confidence === 'related' ? 'Possible related · ' : ''}
           {categoryNames[item.category]}
         </span>
+        {protectedItem && <span className="badge protected-badge">Protected</span>}
         <strong>
           {formatBytes(item.bytes)}
           {item.partial ? ' · partial' : ''}
@@ -1267,33 +1315,43 @@ const LeftoverRow = memo(function LeftoverRow({
   busy,
   outcome,
   onToggle,
+  optionHeld,
+  overridden,
   onReveal
 }: {
   item: ScanItem
   checked: boolean
   busy: boolean
   outcome?: RemovalResult
-  onToggle: (id: string) => void
+  onToggle: (id: string, override?: boolean) => void
+  optionHeld: boolean
+  overridden: boolean
   onReveal: (item: ScanItem) => void
 }) {
+  const overrideable =
+    item.protected && !item.partial && ['uncertain', 'unmatched'].includes(item.confidence)
+  const canSelect = removable(item) || (optionHeld && overrideable)
   return (
     <article className={`leftover${outcome ? ` outcome-${outcome.status}` : ''}`}>
       <label>
         <input
           type="checkbox"
           aria-label={`Select ${item.path}`}
+          className={(optionHeld && overrideable) || overridden ? 'protected-override' : undefined}
           title={
             outcome?.status === 'trashed'
               ? 'Already moved to Trash. Rescan to update this path.'
-              : !removable(item)
-                ? 'Unavailable: this item is protected or incompletely measured.'
+              : !canSelect
+                ? optionHeld
+                  ? 'Option-click to override this protected leftover.'
+                  : 'Hold Option to override this protected leftover.'
                 : busy
                   ? 'Wait for the current operation to finish.'
                   : 'Select this item'
           }
-          disabled={!!busy || !removable(item) || outcome?.status === 'trashed'}
+          disabled={!!busy || !canSelect || outcome?.status === 'trashed'}
           checked={checked}
-          onChange={() => onToggle(item.id)}
+          onChange={() => onToggle(item.id, optionHeld && overrideable)}
         />
       </label>
       <div className="leftover-body">
@@ -1332,15 +1390,19 @@ const LeftoverGroupRow = memo(function LeftoverGroupRow({
   outcomes,
   onToggle,
   onToggleGroup,
-  onReveal
+  onReveal,
+  optionHeld,
+  overridden
 }: {
   group: LeftoverGroup
   selected: Set<string>
   busy: boolean
   outcomes: Map<string, RemovalResult>
-  onToggle: (id: string) => void
+  onToggle: (id: string, override?: boolean) => void
   onToggleGroup: (ids: string[]) => void
   onReveal: (item: ScanItem) => void
+  optionHeld: boolean
+  overridden: Set<string>
 }) {
   const [open, setOpen] = useState(false)
   const checkbox = useRef<HTMLInputElement>(null)
@@ -1426,6 +1488,11 @@ const LeftoverGroupRow = memo(function LeftoverGroupRow({
           </p>
           {group.items.map((item) => {
             const outcome = outcomes.get(item.id)
+            const overrideable =
+              item.protected &&
+              !item.partial &&
+              ['uncertain', 'unmatched'].includes(item.confidence)
+            const canSelect = removable(item) || (optionHeld && overrideable)
             return (
               <div
                 className={`group-path${outcome ? ` outcome-${outcome.status}` : ''}`}
@@ -1434,17 +1501,24 @@ const LeftoverGroupRow = memo(function LeftoverGroupRow({
                 <label>
                   <input
                     type="checkbox"
+                    className={
+                      (optionHeld && overrideable) || overridden.has(item.id)
+                        ? 'protected-override'
+                        : undefined
+                    }
                     aria-label={`Select ${item.path}`}
                     title={
                       outcome?.status === 'trashed'
                         ? 'Already moved to Trash. Rescan to update this path.'
-                        : !removable(item)
-                          ? 'Unavailable: this item is protected or incompletely measured.'
+                        : !canSelect
+                          ? optionHeld
+                            ? 'Option-click to override this protected leftover.'
+                            : 'Hold Option to override this protected leftover.'
                           : 'Select this path'
                     }
-                    disabled={!!busy || !removable(item) || outcome?.status === 'trashed'}
+                    disabled={!!busy || !canSelect || outcome?.status === 'trashed'}
                     checked={selected.has(item.id)}
-                    onChange={() => onToggle(item.id)}
+                    onChange={() => onToggle(item.id, optionHeld && overrideable)}
                   />
                 </label>
                 <div className="group-path-body">

@@ -540,6 +540,15 @@ td {
   border-radius: 6px;
   white-space: normal;
 }
+.path-item.protected-path {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
+.path-item .protected-badge {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  font-weight: 650;
+}
 .path-top {
   display: flex;
   align-items: center;
@@ -821,6 +830,14 @@ input[type='checkbox'] {
 }
 input[type='checkbox']:enabled:hover {
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+input[type='checkbox'].protected-override {
+  border-color: #d97706;
+  background: #fff7ed;
+}
+input[type='checkbox'].protected-override:checked {
+  background: #d97706;
+  border-color: #d97706;
 }
 input[type='checkbox']:checked {
   background: var(--accent);

@@ -1037,6 +1037,21 @@ describe('removal review, confirmation and revalidation', () => {
     expect((await service.confirm(plan.id))[0]?.status).toBe('trashed')
     expect(trash).toHaveBeenCalledOnce()
   })
+  it('allows an explicit protected leftover override', async () => {
+    await data('com.apple.Safari.WebApp')
+    const snapshot = await scan(config, platform),
+      trash = vi.fn(async () => {})
+    const service = new RemovalService(config, platform, trash)
+    service.setSnapshot(snapshot)
+    const item = snapshot.view.items.find((entry) => entry.name === 'com.apple.Safari.WebApp')!
+    const plan = await service.review({
+      scanId: snapshot.view.id,
+      itemIds: [item.id],
+      allowProtectedItemIds: [item.id]
+    })
+    expect((await service.confirm(plan.id))[0]?.status).toBe('trashed')
+    expect(trash).toHaveBeenCalledOnce()
+  })
   it('rejects arbitrary paths, unknown IDs, duplicates, empty requests, and old scan IDs', async () => {
     const { service, request } = await setup()
     for (const itemIds of [[], ['/tmp/arbitrary'], [request.itemIds[0]!, request.itemIds[0]!]])
