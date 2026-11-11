@@ -3,6 +3,7 @@ import type { MacstodianAPI, ScanProgress } from '../shared/api'
 
 const api: MacstodianAPI = {
   scan: () => ipcRenderer.invoke('storage:scan'),
+  getAppIcons: (appIds) => ipcRenderer.invoke('storage:app-icons', appIds),
   onProgress: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, progress: ScanProgress) =>
       callback(progress)

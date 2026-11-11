@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.0-beta.1
+
+- Show each installed application's native macOS icon beside its name.
+
 ## 1.3.0-beta.2
 
 - Fix Finder retries for app bundles by resolving the selected path to an alias before asking Finder to move it to Trash.

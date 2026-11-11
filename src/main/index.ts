@@ -1,17 +1,31 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } from 'electron'
 import { join } from 'node:path'
 import { defaultConfig, scan } from './scanner'
 import { macPlatform } from './platform'
 import { RemovalService } from './removal'
 import { trashWithFinder } from './finder-trash'
-import type { ReviewRequest } from '../shared/api'
+import type { ReviewRequest, ScanSnapshot } from '../shared/api'
 
 let window: BrowserWindow | null = null
+let snapshot: ScanSnapshot | null = null
 let scanning = false,
   removing = false,
   reviewing = false
+const iconCache = new Map<string, string | null>()
 const config = defaultConfig()
 const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#141a17' : '#f8faf8')
+async function loadBundleIcon(bundlePath: string): Promise<string | null> {
+  try {
+    const thumbnail = await nativeImage.createThumbnailFromPath(bundlePath, {
+      width: 40,
+      height: 40
+    })
+    if (thumbnail.isEmpty()) return null
+    return `data:image/png;base64,${thumbnail.toPNG().toString('base64')}`
+  } catch {
+    return null
+  }
+}
 const removal = new RemovalService(
   config,
   macPlatform,
@@ -60,16 +74,53 @@ function registerIPC() {
     if (scanning || removing || reviewing)
       throw new Error('A scan, review, or removal is already in progress.')
     scanning = true
+    snapshot = null
     removal.setSnapshot(null)
     try {
       const result = await scan(config, macPlatform, (progress) =>
         window?.webContents.send('storage:progress', progress)
       )
       removal.setSnapshot(result)
+      snapshot = result.view
       return result.view
     } finally {
       scanning = false
     }
+  })
+  handle('storage:app-icons', async (payload) => {
+    if (
+      !Array.isArray(payload) ||
+      payload.length > 512 ||
+      payload.some((id) => typeof id !== 'string')
+    )
+      throw new Error('Invalid application icon request.')
+    if (!snapshot) throw new Error('No scan is available for application icons.')
+
+    const apps = new Map(snapshot.apps.map((app) => [app.id, app]))
+    const icons: Record<string, string | null> = {}
+    const loadIcon = async (id: string) => {
+        const appInfo = apps.get(id)
+        if (!appInfo) {
+          icons[id] = null
+          return
+        }
+        const cached = iconCache.get(appInfo.path)
+        if (cached !== undefined) {
+          icons[id] = cached
+          return
+        }
+        try {
+          const dataUrl = await loadBundleIcon(appInfo.path)
+          iconCache.set(appInfo.path, dataUrl)
+          icons[id] = dataUrl
+        } catch {
+          iconCache.set(appInfo.path, null)
+          icons[id] = null
+        }
+    }
+    for (let index = 0; index < payload.length; index += 8)
+      await Promise.all(payload.slice(index, index + 8).map(loadIcon))
+    return icons
   })
   handle('storage:review', async (payload) => {
     if (scanning || removing || reviewing)
