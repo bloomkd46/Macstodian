@@ -654,6 +654,17 @@ footer span:last-child {
   font-size: 11px;
   margin: 6px 0;
 }
+.outcomes .outcomes-rescan {
+  margin: 9px 0 0;
+  padding: 6px 9px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.outcomes .outcomes-rescan:hover {
+  background: var(--surface-hover);
+}
 .empty {
   text-align: center;
   margin: 85px auto;

@@ -231,8 +231,19 @@ try {
   await dialog.getByRole('button', { name: 'Confirm move to Trash' }).click()
   await expect(page.getByRole('region', { name: 'Removal outcomes' })).toContainText('Failed')
   await expect(page.getByRole('region', { name: 'Removal outcomes' })).toContainText('Skipped')
+  await expect(page.getByRole('heading', { name: 'Ready for a fresh scan.' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Scan summary' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Rescan', exact: true })).toBeVisible()
+  expect(await electronApp.evaluate(() => globalThis.__uiTest.scans)).toBe(1)
+  await page.screenshot({ path: join(output, 'rescan-prompt.png') })
+  await page
+    .getByRole('region', { name: 'Removal outcomes' })
+    .getByRole('button', {
+      name: 'Rescan now'
+    })
+    .click()
   await expect.poll(() => electronApp.evaluate(() => globalThis.__uiTest.scans)).toBe(2)
-  await page.getByRole('button', { name: 'Dismiss results' }).click()
+  await expect(page.getByRole('region', { name: 'Removal outcomes' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Review removal', exact: true }).nth(1).click()
   await dialog.getByRole('button', { name: 'Review selected paths' }).click()
   await expect(dialog.getByRole('alert')).toContainText('Quit Running App')
@@ -278,9 +289,18 @@ try {
   await expect(page.getByRole('region', { name: 'Removal outcomes' })).toContainText(
     'Moved to Trash'
   )
-  await expect(page.locator('article.leftover')).toHaveCount(0)
-  expect(await electronApp.evaluate(() => globalThis.__uiTest.scans)).toBe(3)
+  await expect(page.getByRole('heading', { name: 'Ready for a fresh scan.' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Scan summary' })).toHaveCount(0)
+  expect(await electronApp.evaluate(() => globalThis.__uiTest.scans)).toBe(2)
   expect(await electronApp.evaluate(() => globalThis.__uiTest.confirmations)).toBe(2)
+  await page
+    .getByRole('region', { name: 'Removal outcomes' })
+    .getByRole('button', {
+      name: 'Rescan now'
+    })
+    .click()
+  await expect.poll(() => electronApp.evaluate(() => globalThis.__uiTest.scans)).toBe(3)
+  await expect(page.locator('article.leftover')).toHaveCount(0)
   await expect(page.locator('.stats > div').nth(3).locator('strong')).toHaveText('0 B')
   // A large fixture catches whole-list remounts and expensive selection renders.
   await electronApp.evaluate(() => {
@@ -382,7 +402,7 @@ try {
       'review lists all selected paths before confirmation',
       'renderer submits IDs only',
       'bundle failure / skipped data outcomes displayed',
-      'automatic rescan after confirmation',
+      'removal results prompt a manual rescan and clear the stale scan',
       'running-app rejection displayed',
       'leftover explicit selection / confirmation',
       'same-name leftovers grouped with combined size and individual path controls',

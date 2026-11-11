@@ -252,6 +252,7 @@ export function App() {
     const unsubscribe = window.macstodian.onProgress(setProgress)
     try {
       setSnapshot(await window.macstodian.scan())
+      setResults(null)
     } catch (error) {
       setError(errorMessage(error))
     } finally {
@@ -297,17 +298,18 @@ export function App() {
     operation.current = true
     setBusy('remove')
     setError('')
-    let removalError = ''
     try {
       setResults(await window.macstodian.confirm(plan.id))
+      setSnapshot(null)
+      setSelected(new Set())
+      setExpanded(new Set())
+      setAppSelection(new Set())
     } catch (error) {
-      removalError = errorMessage(error)
+      setError(errorMessage(error))
     } finally {
       setPlan(null)
       operation.current = false
       setBusy(null)
-      await scanMac()
-      if (removalError) setError(removalError)
     }
   }
   const openAppReview = useCallback(
@@ -404,7 +406,7 @@ export function App() {
             </div>
             <button className="primary" disabled={!!busy} onClick={() => void scanMac()}>
               <RefreshCw size={15} className={busy === 'scan' ? 'spin' : ''} />
-              {busy === 'scan' ? 'Scanning…' : snapshot ? 'Rescan' : 'Scan this Mac'}
+              {busy === 'scan' ? 'Scanning…' : snapshot || results ? 'Rescan' : 'Scan this Mac'}
             </button>
           </div>
         </header>
@@ -420,7 +422,10 @@ export function App() {
           <section className="notice outcomes" aria-label="Removal outcomes">
             <div>
               <strong>Removal results</strong>
-              <p>Storage becomes available after Trash is emptied.</p>
+              <p>
+                The previous scan is out of date. Rescan when you’re ready to refresh paths and
+                storage estimates. Storage becomes available after Trash is emptied.
+              </p>
               {results.map((result) => (
                 <p key={result.itemId}>
                   <b>
@@ -435,6 +440,9 @@ export function App() {
                   {result.message}
                 </p>
               ))}
+              <button className="outcomes-rescan" disabled={!!busy} onClick={() => void scanMac()}>
+                <RefreshCw size={14} /> Rescan now
+              </button>
             </div>
             <button aria-label="Dismiss results" onClick={() => setResults(null)}>
               <X size={16} />
@@ -464,14 +472,18 @@ export function App() {
             <div className="empty-icon">
               <FolderSearch size={36} />
             </div>
-            <h2>A clearer picture of your storage.</h2>
-            <p>
-              Scan Applications and five folders in your user Library.
-              <br />
-              Review sizes, ownership, and dates before making a change.
-            </p>
+            <h2>{results ? 'Ready for a fresh scan.' : 'A clearer picture of your storage.'}</h2>
+            {results ? (
+              <p>The previous scan is no longer current. Rescan to see updated paths and totals.</p>
+            ) : (
+              <p>
+                Scan Applications and five folders in your user Library.
+                <br />
+                Review sizes, ownership, and dates before making a change.
+              </p>
+            )}
             <button className="primary" onClick={() => void scanMac()}>
-              Start read-only scan
+              {results ? 'Rescan this Mac' : 'Start read-only scan'}
             </button>
             <span>
               <LockKeyhole size={13} /> Nothing is removed during scanning
