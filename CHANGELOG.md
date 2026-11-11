@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.0-beta.2
+
+- Offer an optional Finder retry when moving a selected item to Trash fails because of permissions, with another safety check after approval.
+
 ## 1.2.0-beta.1
 
 - Keep scan results available after moving items to Trash so more apps can be removed without rescanning.
