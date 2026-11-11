@@ -1,8 +1,9 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron'
 import { join } from 'node:path'
 import { defaultConfig, scan } from './scanner'
 import { macPlatform } from './platform'
 import { RemovalService } from './removal'
+import { trashWithFinder } from './finder-trash'
 import type { ReviewRequest } from '../shared/api'
 
 let window: BrowserWindow | null = null
@@ -11,11 +12,37 @@ let scanning = false,
   reviewing = false
 const config = defaultConfig()
 const windowBackground = () => (nativeTheme.shouldUseDarkColors ? '#141a17' : '#f8faf8')
-const removal = new RemovalService(config, macPlatform, async (path) => {
-  if (!app.isPackaged && process.env.MACSTODIAN_VERIFY_READ_ONLY === '1')
-    throw new Error('Trash is disabled during read-only verification.')
-  await shell.trashItem(path)
-})
+const removal = new RemovalService(
+  config,
+  macPlatform,
+  async (path) => {
+    if (!app.isPackaged && process.env.MACSTODIAN_VERIFY_READ_ONLY === '1')
+      throw new Error('Trash is disabled during read-only verification.')
+    await shell.trashItem(path)
+  },
+  {
+    async approve(path) {
+      if (!window || (!app.isPackaged && process.env.MACSTODIAN_VERIFY_READ_ONLY === '1'))
+        return false
+      const { response } = await dialog.showMessageBox(window, {
+        type: 'warning',
+        title: 'Try moving this item with Finder?',
+        message: 'Macstodian could not move this item to Trash because access was denied.',
+        detail: `${path}\n\nFinder may be able to move it, or macOS may ask for permission. The item will still go to Trash, not be permanently deleted.`,
+        buttons: ['Cancel', 'Try with Finder'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true
+      })
+      return response === 1
+    },
+    async trash(path) {
+      if (!app.isPackaged && process.env.MACSTODIAN_VERIFY_READ_ONLY === '1')
+        throw new Error('Finder Trash is disabled during read-only verification.')
+      await trashWithFinder(path)
+    }
+  }
+)
 
 function registerIPC() {
   const handle = (channel: string, action: (payload: unknown) => unknown) =>

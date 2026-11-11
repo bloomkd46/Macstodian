@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0-beta.2
+
+- Fix Finder retries for app bundles by resolving the selected path to an alias before asking Finder to move it to Trash.
+
+## 1.3.0-beta.1
+
+- Offer an optional Finder retry when moving a selected item to Trash fails because of permissions, with another safety check after approval.
+
 ## 1.2.0-beta.1
 
 - Keep scan results available after moving items to Trash so more apps can be removed without rescanning.
