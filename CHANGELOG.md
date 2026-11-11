@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1-beta.3
+
+- Make GitHub release notes match the changelog entries added for the release.
+
 ## 1.0.1-beta.2
 
 - Show the package version in the app's sidebar instead of a hardcoded version.
