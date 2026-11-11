@@ -107,6 +107,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
           pattern: macstodian-*
@@ -122,11 +125,17 @@ jobs:
           cd release
           sha256sum -c SHA256SUMS-arm64.txt
           sha256sum -c SHA256SUMS-x64.txt
+      - name: Prepare changelog release notes
+        env:
+          BEFORE_COMMIT: ${{ github.event.before }}
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/macstodian-release-notes.md
+        run: node scripts/release-notes.mjs
       - name: Create draft and publish
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/macstodian-release-notes.md
         run: |
           set -euo pipefail
           tag="v${RELEASE_VERSION}"
@@ -142,8 +151,7 @@ jobs:
               prerelease=(--prerelease)
             fi
             gh release create "$tag" release/*.dmg release/SHA256SUMS-*.txt \
-              --draft --target "$GITHUB_SHA" --generate-notes \
-              --notes 'These macOS builds are unsigned and not notarized. Check the SHA256SUMS files before installing. macOS may require approval in System Settings > Privacy & Security.' \
+              --draft --target "$GITHUB_SHA" --title "$tag" --notes-file "$RELEASE_NOTES_FILE" \
               "${prerelease[@]}"
           fi
-          gh release edit "$tag" --draft=false
+          gh release edit "$tag" --notes-file "$RELEASE_NOTES_FILE" --draft=false

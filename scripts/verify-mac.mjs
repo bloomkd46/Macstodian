@@ -195,6 +195,20 @@ try {
     await page.screenshot({ path: join(output, 'grouped-leftovers.png') })
     await grouped.getByRole('button', { name: /^Details for/ }).click()
   }
+  const leftoverSearch = page.getByRole('textbox', { name: 'Search leftovers' })
+  await leftoverSearch.fill('TabNine')
+  const tabnine = page.locator('.grouped-leftover').filter({
+    has: page.getByRole('button', { name: 'Details for TabNine', exact: true })
+  })
+  if (await tabnine.count()) {
+    await tabnine.getByRole('button', { name: 'Details for TabNine' }).click()
+    const total = await tabnine.locator('.leftover-title > strong').innerText()
+    if ((await tabnine.locator('.group-path').count()) <= 3)
+      await expect(tabnine.locator('.group-size-breakdown')).toContainText(total)
+    else await expect(tabnine.locator('.group-size-breakdown')).toContainText('bytes total')
+    await page.screenshot({ path: join(output, 'tabnine-group.png') })
+  }
+  await leftoverSearch.fill('')
   const sizes = await page.locator('.leftover-title > strong').allTextContents()
   const factor = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3, TB: 1024 ** 4 }
   const bytes = sizes.map((value) => {
@@ -263,6 +277,7 @@ try {
       'leftovers largest first',
       'leftover age sorting in both directions',
       'same-name leftovers grouped with inspectable paths',
+      'TabNine group shows its combined total and path breakdown when present',
       'leftovers review / explicit confirmation screen',
       'no Trash confirmation invoked'
     ]
