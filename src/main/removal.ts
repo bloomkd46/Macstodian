@@ -29,6 +29,7 @@ interface StoredPlan {
 export class RemovalService {
   private plans = new Map<string, StoredPlan>()
   private snapshot: InternalScan | null = null
+  private trashedIds = new Set<string>()
   private busy = false
   private config: ScanConfig
   private platform: Platform
@@ -41,6 +42,7 @@ export class RemovalService {
   setSnapshot(snapshot: InternalScan | null) {
     this.snapshot = snapshot
     this.plans.clear()
+    this.trashedIds.clear()
   }
   private current(scanId: string): InternalScan {
     if (!this.snapshot || this.snapshot.view.id !== scanId)
@@ -48,6 +50,8 @@ export class RemovalService {
     return this.snapshot
   }
   private resolveItem(snapshot: InternalScan, id: string): InternalItem {
+    if (this.trashedIds.has(id))
+      throw new Error('Item was moved to Trash. Rescan before using it again.')
     const record = snapshot.records.get(id)
     if (!record) throw new Error('Unknown scan item. Rescan and select the items again.')
     return record
@@ -202,6 +206,7 @@ export class RemovalService {
           if (!sameIdentity(record.identity, identity(finalStat)))
             throw new Error(`Item identity changed. Rescan: ${item.path}`)
           await this.trash(item.path)
+          this.trashedIds.add(item.id)
           if (item.category === 'bundle') bundleTrashed = true
           results.push({
             itemId: item.id,
@@ -219,8 +224,9 @@ export class RemovalService {
           if (item.category === 'bundle') stop = true
         }
       }
-      // Any attempted mutation invalidates all old IDs and reviews.
-      this.setSnapshot(null)
+      // Keep unaffected scan items available; each subsequent review revalidates
+      // the item and app. Successful Trash items cannot be selected again.
+      this.plans.clear()
       return results
     } finally {
       this.busy = false

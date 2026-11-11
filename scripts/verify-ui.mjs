@@ -102,7 +102,7 @@ globalThis.__uiTest = { scans: 0, requests: [], confirmations: 0, reveals: [], o
 let snapshot, plan;
 ipcMain.handle('storage:scan', () => { globalThis.__uiTest.scans++; snapshot = { id: 'scan-' + globalThis.__uiTest.scans, createdAt: Date.now(), durationMs: 1, apps, items: globalThis.__uiTest.stress ? [...Array.from({ length: 3000 }, (_, n) => ({ ...items[4], id: 'stress-' + n, name: 'stress-' + n, path: '/fixture/Library/Application Support/stress-' + n, bytes: 4000 - n, latestChange: Date.UTC(2025, 0, n + 2) })), { ...items[4], id: 'protected-stress', name: 'protected-stress', path: '/fixture/Library/Application Support/protected-stress', protected: true, latestChange: null }, ...Array.from({ length: 2000 }, (_, n) => ({ ...items[6], id: 'related-' + n }))] : items.filter(i => !i.id.startsWith('orphan') || globalThis.__uiTest.orphan), skipped: globalThis.__uiTest.stress ? Array.from({ length: 2000 }, (_, n) => ({ path: '/fixture/denied/' + n, reason: 'Fixture denial' })) : [], roots: ['/fixture'] }; return snapshot; });
 ipcMain.handle('storage:review', (_event, request) => { globalThis.__uiTest.requests.push(request); if (request.scanId !== snapshot.id) throw new Error('Stale selection.'); if (request.appId === 'running') throw new Error('Quit Running App before removing its bundle or data, then try again.'); const selected = request.itemIds.map(id => snapshot.items.find(i => i.id === id)); if (selected.some(i => !i)) throw new Error('Unknown ID'); plan = { id: 'plan-' + globalThis.__uiTest.requests.length, items: selected, appName: request.appId ? 'Alpha' : null, totalBytes: selected.reduce((n, i) => n + i.bytes, 0), expiresAt: Date.now() + 300000 }; return plan; });
-ipcMain.handle('storage:confirm', (_event, id) => { if (id !== plan.id) throw new Error('Invalid plan'); globalThis.__uiTest.confirmations++; if (!plan.appName) globalThis.__uiTest.orphan = false; return plan.items.map(i => ({ itemId: i.id, path: i.path, status: plan.appName ? i.category === 'bundle' ? 'failed' : 'skipped' : 'trashed', message: plan.appName ? 'Fixture bundle failure: data left untouched.' : 'Moved to Trash (fixture only).' })); });
+ipcMain.handle('storage:confirm', (_event, id) => { if (id !== plan.id) throw new Error('Invalid plan'); globalThis.__uiTest.confirmations++; if (!plan.appName) globalThis.__uiTest.orphan = false; return plan.items.map(i => ({ itemId: i.id, path: i.path, status: plan.appName ? i.category === 'bundle' ? 'failed' : 'skipped' : 'trashed', message: plan.appName ? i.category === 'bundle' ? 'EACCES: permission denied while moving app to Trash.' : 'Fixture bundle failure: data left untouched.' : 'Moved to Trash (fixture only).' })); });
 ipcMain.handle('storage:reveal', (_event, request) => { globalThis.__uiTest.reveals.push(request); });
 app.whenReady().then(() => { const win = new BrowserWindow({ width: 1380, height: 900, webPreferences: { preload: ${JSON.stringify(join(root, 'out/preload/index.js'))}, contextIsolation: true, sandbox: true, nodeIntegration: false } }); win.loadFile(${JSON.stringify(join(root, 'out/renderer/index.html'))}); });
 app.on('window-all-closed', () => app.quit());
@@ -229,10 +229,17 @@ try {
   })
   expect(await electronApp.evaluate(() => globalThis.__uiTest.confirmations)).toBe(0)
   await dialog.getByRole('button', { name: 'Confirm move to Trash' }).click()
-  await expect(page.getByRole('region', { name: 'Removal outcomes' })).toContainText('Failed')
-  await expect(page.getByRole('region', { name: 'Removal outcomes' })).toContainText('Skipped')
-  await expect.poll(() => electronApp.evaluate(() => globalThis.__uiTest.scans)).toBe(2)
-  await page.getByRole('button', { name: 'Dismiss results' }).click()
+  const failedBanner = page.getByRole('region', { name: 'Removal outcomes' })
+  await expect(failedBanner).toHaveClass(/outcomes-error/)
+  await expect(failedBanner).toContainText('Removal failed')
+  await expect(failedBanner).toContainText('permission denied')
+  await expect(failedBanner).toContainText('Not removed')
+  await expect(page.getByRole('region', { name: 'Scan summary' })).toBeVisible()
+  await expect(alphaRow).toContainText('Removal failed')
+  await expect(alphaRow).toHaveClass(/outcome-failed/)
+  await expect(page.getByRole('button', { name: 'Rescan', exact: true })).toBeVisible()
+  expect(await electronApp.evaluate(() => globalThis.__uiTest.scans)).toBe(1)
+  await page.screenshot({ path: join(output, 'removal-failed.png') })
   await page.getByRole('button', { name: 'Review removal', exact: true }).nth(1).click()
   await dialog.getByRole('button', { name: 'Review selected paths' }).click()
   await expect(dialog.getByRole('alert')).toContainText('Quit Running App')
@@ -275,12 +282,26 @@ try {
   await expect(dialog.locator('.path-item')).toHaveCount(2)
   await page.screenshot({ path: join(output, 'fixture-confirmation.png') })
   await dialog.getByRole('button', { name: 'Confirm move to Trash' }).click()
-  await expect(page.getByRole('region', { name: 'Removal outcomes' })).toContainText(
-    'Moved to Trash'
-  )
-  await expect(page.locator('article.leftover')).toHaveCount(0)
-  expect(await electronApp.evaluate(() => globalThis.__uiTest.scans)).toBe(3)
+  const successBanner = page.getByRole('region', { name: 'Removal outcomes' })
+  await expect(successBanner).toContainText('Moved to Trash')
+  await expect(successBanner).toHaveClass(/outcomes-error/)
+  await expect(successBanner).toContainText('permission denied')
+  await expect(page.getByRole('region', { name: 'Scan summary' })).toBeVisible()
+  await expect(page.locator('article.leftover')).toHaveCount(1)
+  await expect(page.locator('article.leftover')).toHaveClass(/outcome-trashed/)
+  await expect(page.locator('article.leftover').getByRole('checkbox').first()).toBeDisabled()
+  expect(await electronApp.evaluate(() => globalThis.__uiTest.scans)).toBe(1)
   expect(await electronApp.evaluate(() => globalThis.__uiTest.confirmations)).toBe(2)
+  expect(await electronApp.evaluate(() => globalThis.__uiTest.requests.at(-1).scanId)).toBe(
+    'scan-1'
+  )
+  await page.screenshot({ path: join(output, 'removal-trashed.png') })
+  await successBanner.getByRole('button', { name: 'Dismiss results' }).click()
+  await expect(page.locator('.stale-note')).toContainText('Rescan for current totals')
+  await expect(page.locator('article.leftover')).toHaveClass(/outcome-trashed/)
+  await page.locator('.stale-note').getByRole('button', { name: 'Rescan now' }).click()
+  await expect.poll(() => electronApp.evaluate(() => globalThis.__uiTest.scans)).toBe(2)
+  await expect(page.locator('article.leftover')).toHaveCount(0)
   await expect(page.locator('.stats > div').nth(3).locator('strong')).toHaveText('0 B')
   // A large fixture catches whole-list remounts and expensive selection renders.
   await electronApp.evaluate(() => {
@@ -382,7 +403,8 @@ try {
       'review lists all selected paths before confirmation',
       'renderer submits IDs only',
       'bundle failure / skipped data outcomes displayed',
-      'automatic rescan after confirmation',
+      'permission failures use a red banner while the scan remains usable',
+      'moved paths stay marked and disabled until an optional rescan',
       'running-app rejection displayed',
       'leftover explicit selection / confirmation',
       'same-name leftovers grouped with combined size and individual path controls',

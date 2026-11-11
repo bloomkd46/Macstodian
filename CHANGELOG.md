@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0-beta.1
+
+- Keep scan results available after moving items to Trash so more apps can be removed without rescanning.
+- Mark moved items in the list and recommend a rescan to refresh storage estimates.
+- Make removal failures prominent in the banner and mark failed items in red.
+
 ## 1.1.0-beta.1
 
 - Change the sidebar tagline to "The custodian for your Mac".
