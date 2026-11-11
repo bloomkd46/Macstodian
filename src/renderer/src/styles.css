@@ -646,6 +646,21 @@ footer span:last-child {
   background: var(--success-bg);
   border: 1px solid var(--success-border);
 }
+.outcomes.outcomes-error {
+  background: var(--error-bg);
+  border-color: var(--error-border);
+  color: var(--error-text);
+}
+.outcomes.outcomes-warning {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--warning-text);
+}
+.outcomes .outcome-line.outcome-failed {
+  border-left: 3px solid var(--error-text);
+  padding-left: 8px;
+  font-weight: 550;
+}
 .notice p,
 .skipped p {
   color: inherit;
@@ -653,6 +668,11 @@ footer span:last-child {
 .outcomes p {
   font-size: 11px;
   margin: 6px 0;
+}
+.outcome-list {
+  max-height: 190px;
+  overflow: auto;
+  padding-right: 6px;
 }
 .outcomes .outcomes-rescan {
   margin: 9px 0 0;
@@ -664,6 +684,14 @@ footer span:last-child {
 }
 .outcomes .outcomes-rescan:hover {
   background: var(--surface-hover);
+}
+.outcomes.outcomes-error .outcomes-rescan {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+.stale-note {
+  align-items: center;
 }
 .empty {
   text-align: center;
@@ -848,6 +876,37 @@ input[type='checkbox']:disabled:checked::after {
   border-radius: 4px;
   color: var(--text-quiet);
   white-space: nowrap;
+}
+.outcome-badge {
+  display: inline-flex;
+  margin-top: 5px;
+  font-size: 9px;
+  font-weight: 650;
+}
+.outcome-badge.outcome-failed {
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+.outcome-badge.outcome-trashed,
+.outcome-badge.outcome-skipped {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+.apps-table tr.outcome-failed td,
+.leftover.outcome-failed,
+.path-item.outcome-failed,
+.group-path.outcome-failed {
+  background: var(--error-bg);
+}
+.apps-table tr.outcome-trashed td,
+.apps-table tr.outcome-skipped td,
+.leftover.outcome-trashed,
+.leftover.outcome-skipped,
+.path-item.outcome-trashed,
+.path-item.outcome-skipped,
+.group-path.outcome-trashed,
+.group-path.outcome-skipped {
+  background: var(--warning-bg);
 }
 .amber {
   background: var(--warning-bg);

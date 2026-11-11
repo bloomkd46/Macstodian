@@ -60,6 +60,20 @@ const removable = (item: ScanItem) =>
   !item.protected && !item.partial && !['shared', 'related'].includes(item.confidence)
 const reviewableForApp = (item: ScanItem, app: InstalledApp) =>
   !app.protected && (removable(item) || reviewableRelatedPath(item, app))
+const outcomeLabel = (status: RemovalResult['status']) =>
+  status === 'trashed' ? 'Moved to Trash' : status === 'failed' ? 'Removal failed' : 'Not removed'
+const outcomeRank = { failed: 0, skipped: 1, trashed: 2 }
+const mostImportantOutcome = (results: RemovalResult[]): RemovalResult | undefined =>
+  results.find((result) => result.status === 'failed') ??
+  results.find((result) => result.status === 'trashed') ??
+  results[0]
+function OutcomeTag({ result, label }: { result?: RemovalResult; label?: string }) {
+  return result ? (
+    <span className={`badge outcome-badge outcome-${result.status}`} title={result.message}>
+      {label ?? `${outcomeLabel(result.status)}${result.status === 'trashed' ? ' · rescan' : ''}`}
+    </span>
+  ) : null
+}
 const reviewBlockReason = (
   item: ScanItem,
   app: InstalledApp,
@@ -127,6 +141,7 @@ export function App() {
   const [appSelection, setAppSelection] = useState(new Set<string>())
   const [plan, setPlan] = useState<RemovalPlan | null>(null)
   const [results, setResults] = useState<RemovalResult[] | null>(null)
+  const [outcomes, setOutcomes] = useState(new Map<string, RemovalResult>())
   const items = useMemo(() => new Map(snapshot?.items.map((item) => [item.id, item])), [snapshot])
   const appNames = useMemo(
     () => new Map(snapshot?.apps.map((app) => [app.id, app.name])),
@@ -253,6 +268,7 @@ export function App() {
     try {
       setSnapshot(await window.macstodian.scan())
       setResults(null)
+      setOutcomes(new Map())
     } catch (error) {
       setError(errorMessage(error))
     } finally {
@@ -299,10 +315,12 @@ export function App() {
     setBusy('remove')
     setError('')
     try {
-      setResults(await window.macstodian.confirm(plan.id))
-      setSnapshot(null)
+      const nextResults = await window.macstodian.confirm(plan.id)
+      const nextOutcomes = new Map(outcomes)
+      for (const result of nextResults) nextOutcomes.set(result.itemId, result)
+      setOutcomes(nextOutcomes)
+      setResults([...nextOutcomes.values()])
       setSelected(new Set())
-      setExpanded(new Set())
       setAppSelection(new Set())
     } catch (error) {
       setError(errorMessage(error))
@@ -317,9 +335,15 @@ export function App() {
       setError('')
       setReviewApp(app)
       const bundle = items.get(app.bundleItemId)
-      setAppSelection(new Set(bundle && removable(bundle) ? [bundle.id] : []))
+      setAppSelection(
+        new Set(
+          bundle && removable(bundle) && outcomes.get(bundle.id)?.status !== 'trashed'
+            ? [bundle.id]
+            : []
+        )
+      )
     },
-    [items]
+    [items, outcomes]
   )
   const reviewItems = reviewApp
     ? [
@@ -333,6 +357,12 @@ export function App() {
     : []
   const selectedBytes = sum(
     [...selected].map((id) => items.get(id)).filter((item): item is ScanItem => !!item)
+  )
+  const failedCount = results?.filter((result) => result.status === 'failed').length ?? 0
+  const skippedCount = results?.filter((result) => result.status === 'skipped').length ?? 0
+  const trashedCount = results?.filter((result) => result.status === 'trashed').length ?? 0
+  const visibleResults = [...(results ?? [])].sort(
+    (a, b) => outcomeRank[a.status] - outcomeRank[b.status]
   )
   const modal = !!reviewApp || !!plan
   useEffect(() => {
@@ -419,27 +449,36 @@ export function App() {
           </div>
         )}
         {results && (
-          <section className="notice outcomes" aria-label="Removal outcomes">
+          <section
+            className={`notice outcomes${failedCount ? ' outcomes-error' : skippedCount ? ' outcomes-warning' : ''}`}
+            aria-label="Removal outcomes"
+          >
             <div>
-              <strong>Removal results</strong>
+              <strong>
+                {failedCount
+                  ? trashedCount
+                    ? 'Removal completed with errors'
+                    : 'Removal failed'
+                  : skippedCount
+                    ? 'Some items were not removed'
+                    : 'Moved to Trash'}
+              </strong>
               <p>
-                The previous scan is out of date. Rescan when you’re ready to refresh paths and
-                storage estimates. Storage becomes available after Trash is emptied.
+                {failedCount > 0 &&
+                  `${failedCount} path${failedCount === 1 ? '' : 's'} failed. Check the error below. `}
+                This list still shows the previous scan, with affected items marked. You can review
+                other items now; rescan when you want updated totals. Storage becomes available
+                after Trash is emptied.
               </p>
-              {results.map((result) => (
-                <p key={result.itemId}>
-                  <b>
-                    {result.status === 'trashed'
-                      ? 'Moved to Trash'
-                      : result.status === 'failed'
-                        ? 'Failed'
-                        : 'Skipped'}
-                  </b>{' '}
-                  — <code>{result.path}</code>
-                  <br />
-                  {result.message}
-                </p>
-              ))}
+              <div className="outcome-list">
+                {visibleResults.map((result) => (
+                  <p className={`outcome-line outcome-${result.status}`} key={result.itemId}>
+                    <b>{outcomeLabel(result.status)}</b> — <code>{result.path}</code>
+                    <br />
+                    {result.message}
+                  </p>
+                ))}
+              </div>
               <button className="outcomes-rescan" disabled={!!busy} onClick={() => void scanMac()}>
                 <RefreshCw size={14} /> Rescan now
               </button>
@@ -448,6 +487,12 @@ export function App() {
               <X size={16} />
             </button>
           </section>
+        )}
+        {outcomes.size > 0 && !results && snapshot && (
+          <div className="notice subtle stale-note">
+            <span>Marked items reflect the last removal attempt. Rescan for current totals.</span>
+            <button onClick={() => void scanMac()}>Rescan now</button>
+          </div>
         )}
         {busy === 'scan' && (
           <section className="scan-progress" role="status">
@@ -472,18 +517,14 @@ export function App() {
             <div className="empty-icon">
               <FolderSearch size={36} />
             </div>
-            <h2>{results ? 'Ready for a fresh scan.' : 'A clearer picture of your storage.'}</h2>
-            {results ? (
-              <p>The previous scan is no longer current. Rescan to see updated paths and totals.</p>
-            ) : (
-              <p>
-                Scan Applications and five folders in your user Library.
-                <br />
-                Review sizes, ownership, and dates before making a change.
-              </p>
-            )}
+            <h2>A clearer picture of your storage.</h2>
+            <p>
+              Scan Applications and five folders in your user Library.
+              <br />
+              Review sizes, ownership, and dates before making a change.
+            </p>
             <button className="primary" onClick={() => void scanMac()}>
-              {results ? 'Rescan this Mac' : 'Start read-only scan'}
+              Start read-only scan
             </button>
             <span>
               <LockKeyhole size={13} /> Nothing is removed during scanning
@@ -642,6 +683,7 @@ export function App() {
                         open={expanded.has(app.id)}
                         busy={!!busy}
                         items={items}
+                        outcomes={outcomes}
                         relatedBytes={relatedBytes.get(app.id) ?? 0}
                         onToggle={toggleExpanded}
                         onReview={openAppReview}
@@ -673,6 +715,7 @@ export function App() {
                         item={group.items[0]!}
                         checked={selected.has(group.items[0]!.id)}
                         busy={!!busy}
+                        outcome={outcomes.get(group.items[0]!.id)}
                         onToggle={toggleSelected}
                         onReveal={reveal}
                       />
@@ -680,8 +723,8 @@ export function App() {
                       <LeftoverGroupRow
                         key={group.key}
                         group={group}
-                        selectedCount={group.selectableIds.filter((id) => selected.has(id)).length}
                         busy={!!busy}
+                        outcomes={outcomes}
                         onToggle={toggleSelected}
                         onToggleGroup={toggleGroupSelected}
                         onReveal={reveal}
@@ -725,6 +768,7 @@ export function App() {
                 caption={`${formatBytes(sum(related))} · app review only · counted once in scan summary`}
                 items={related}
                 busy={!!busy}
+                outcomes={outcomes}
                 onReveal={reveal}
               />
             )}
@@ -735,6 +779,7 @@ export function App() {
                 caption={`${formatBytes(sum(shared))} · protected · counted once`}
                 items={shared}
                 busy={!!busy}
+                outcomes={outcomes}
                 onReveal={reveal}
               />
             )}
@@ -851,7 +896,8 @@ export function App() {
                             const blockReason = reviewApp
                               ? reviewBlockReason(item, reviewApp, appNames)
                               : 'This path is unavailable.'
-                            const canInclude = !blockReason
+                            const movedToTrash = outcomes.get(item.id)?.status === 'trashed'
+                            const canInclude = !blockReason && !movedToTrash
                             return (
                               <label
                                 className={`review-choice${group === 'related' ? ' possible-choice' : ''}${group === 'shared' ? ' shared-choice' : ''}${blockReason ? ' blocked-choice' : ''}`}
@@ -864,13 +910,15 @@ export function App() {
                                     blockReason ? `review-block-${item.id}` : undefined
                                   }
                                   title={
-                                    blockReason
-                                      ? blockReason
-                                      : busy
-                                        ? 'Wait for the current operation to finish.'
-                                        : item.confidence === 'related'
-                                          ? 'Select this possible related path after reviewing it'
-                                          : 'Select this item'
+                                    movedToTrash
+                                      ? 'Already moved to Trash. Rescan to update this path.'
+                                      : blockReason
+                                        ? blockReason
+                                        : busy
+                                          ? 'Wait for the current operation to finish.'
+                                          : item.confidence === 'related'
+                                            ? 'Select this possible related path after reviewing it'
+                                            : 'Select this item'
                                   }
                                   disabled={!!busy || !canInclude}
                                   checked={appSelection.has(item.id)}
@@ -880,6 +928,7 @@ export function App() {
                                 />
                                 <div>
                                   <code>{item.path}</code>
+                                  <OutcomeTag result={outcomes.get(item.id)} />
                                   <small>
                                     {categoryNames[item.category]} · {formatBytes(item.bytes)}
                                     {item.confidence === 'related' ? ' · possible relation' : ''}
@@ -952,15 +1001,17 @@ const toggle = (values: Set<string>, id: string) => {
 }
 const PathItem = memo(function PathItem({
   item,
+  outcome,
   busy,
   onReveal
 }: {
   item: ScanItem
+  outcome?: RemovalResult
   busy: boolean
   onReveal: (item: ScanItem) => void
 }) {
   return (
-    <div className="path-item">
+    <div className={`path-item${outcome ? ` outcome-${outcome.status}` : ''}`}>
       <div className="path-top">
         <span className="category">
           {item.confidence === 'related' ? 'Possible related · ' : ''}
@@ -970,7 +1021,12 @@ const PathItem = memo(function PathItem({
           {formatBytes(item.bytes)}
           {item.partial ? ' · partial' : ''}
         </strong>
-        <button className="text-button" disabled={!!busy} onClick={() => onReveal(item)}>
+        <OutcomeTag result={outcome} />
+        <button
+          className="text-button"
+          disabled={!!busy || outcome?.status === 'trashed'}
+          onClick={() => onReveal(item)}
+        >
           Show in Finder ↗
         </button>
       </div>
@@ -1025,6 +1081,7 @@ const AppRows = memo(function AppRows({
   open,
   busy,
   items,
+  outcomes,
   relatedBytes,
   onToggle,
   onReview,
@@ -1034,14 +1091,21 @@ const AppRows = memo(function AppRows({
   open: boolean
   busy: boolean
   items: Map<string, ScanItem>
+  outcomes: Map<string, RemovalResult>
   relatedBytes: number
   onToggle: (id: string) => void
   onReview: (app: InstalledApp) => void
   onReveal: (item: ScanItem) => void
 }) {
+  const outcome = mostImportantOutcome(
+    [app.bundleItemId, ...app.dataItemIds, ...app.relatedItemIds]
+      .map((id) => outcomes.get(id))
+      .filter((result): result is RemovalResult => !!result)
+  )
+  const bundleTrashed = outcomes.get(app.bundleItemId)?.status === 'trashed'
   return (
     <>
-      <tr className={open ? 'expanded-row' : ''}>
+      <tr className={`${open ? 'expanded-row ' : ''}${outcome ? `outcome-${outcome.status}` : ''}`}>
         <td>
           <button
             className="app-name"
@@ -1060,6 +1124,14 @@ const AppRows = memo(function AppRows({
                 {app.partial ? 'Partial · ' : ''}
                 {app.bundleId ?? 'Bundle identity unknown'}
               </small>
+              <OutcomeTag
+                result={outcome}
+                label={
+                  outcome?.status === 'trashed' && !bundleTrashed
+                    ? 'Data moved to Trash · rescan'
+                    : undefined
+                }
+              />
             </span>
           </button>
         </td>
@@ -1090,7 +1162,16 @@ const AppRows = memo(function AppRows({
               Protected
             </span>
           ) : (
-            <button className="review-button" disabled={!!busy} onClick={() => onReview(app)}>
+            <button
+              className="review-button"
+              disabled={!!busy || bundleTrashed}
+              title={
+                bundleTrashed
+                  ? 'This app was moved to Trash. Rescan to update its data.'
+                  : undefined
+              }
+              onClick={() => onReview(app)}
+            >
               Review removal
             </button>
           )}
@@ -1107,7 +1188,17 @@ const AppRows = memo(function AppRows({
             </div>
             {[app.bundleItemId, ...app.dataItemIds, ...app.sharedItemIds].map((id) => {
               const item = items.get(id)
-              return item && <PathItem key={id} item={item} busy={busy} onReveal={onReveal} />
+              return (
+                item && (
+                  <PathItem
+                    key={id}
+                    item={item}
+                    outcome={outcomes.get(id)}
+                    busy={busy}
+                    onReveal={onReveal}
+                  />
+                )
+              )
             })}
             {!!app.relatedItemIds?.length && (
               <>
@@ -1120,7 +1211,17 @@ const AppRows = memo(function AppRows({
                 </div>
                 {app.relatedItemIds.map((id) => {
                   const item = items.get(id)
-                  return item && <PathItem key={id} item={item} busy={busy} onReveal={onReveal} />
+                  return (
+                    item && (
+                      <PathItem
+                        key={id}
+                        item={item}
+                        outcome={outcomes.get(id)}
+                        busy={busy}
+                        onReveal={onReveal}
+                      />
+                    )
+                  )
                 })}
               </>
             )}
@@ -1135,29 +1236,33 @@ const LeftoverRow = memo(function LeftoverRow({
   item,
   checked,
   busy,
+  outcome,
   onToggle,
   onReveal
 }: {
   item: ScanItem
   checked: boolean
   busy: boolean
+  outcome?: RemovalResult
   onToggle: (id: string) => void
   onReveal: (item: ScanItem) => void
 }) {
   return (
-    <article className="leftover">
+    <article className={`leftover${outcome ? ` outcome-${outcome.status}` : ''}`}>
       <label>
         <input
           type="checkbox"
           aria-label={`Select ${item.path}`}
           title={
-            !removable(item)
-              ? 'Unavailable: this item is protected or incompletely measured.'
-              : busy
-                ? 'Wait for the current operation to finish.'
-                : 'Select this item'
+            outcome?.status === 'trashed'
+              ? 'Already moved to Trash. Rescan to update this path.'
+              : !removable(item)
+                ? 'Unavailable: this item is protected or incompletely measured.'
+                : busy
+                  ? 'Wait for the current operation to finish.'
+                  : 'Select this item'
           }
-          disabled={!!busy || !removable(item)}
+          disabled={!!busy || !removable(item) || outcome?.status === 'trashed'}
           checked={checked}
           onChange={() => onToggle(item.id)}
         />
@@ -1169,6 +1274,7 @@ const LeftoverRow = memo(function LeftoverRow({
             {item.confidence === 'uncertain' ? 'Uncertain owner' : 'No owner identified'}
           </span>
           {!removable(item) && <span className="badge">Protected</span>}
+          <OutcomeTag result={outcome} />
           <strong>
             {formatBytes(item.bytes)}
             {item.partial ? ' · partial' : ''}
@@ -1180,7 +1286,11 @@ const LeftoverRow = memo(function LeftoverRow({
         </p>
         <p>{item.reason}</p>
       </div>
-      <button className="text-button" disabled={!!busy} onClick={() => onReveal(item)}>
+      <button
+        className="text-button"
+        disabled={!!busy || outcome?.status === 'trashed'}
+        onClick={() => onReveal(item)}
+      >
         Show in Finder ↗
       </button>
     </article>
@@ -1188,17 +1298,17 @@ const LeftoverRow = memo(function LeftoverRow({
 })
 const LeftoverGroupRow = memo(function LeftoverGroupRow({
   group,
-  selectedCount,
   selected,
   busy,
+  outcomes,
   onToggle,
   onToggleGroup,
   onReveal
 }: {
   group: LeftoverGroup
-  selectedCount: number
   selected: Set<string>
   busy: boolean
+  outcomes: Map<string, RemovalResult>
   onToggle: (id: string) => void
   onToggleGroup: (ids: string[]) => void
   onReveal: (item: ScanItem) => void
@@ -1206,13 +1316,22 @@ const LeftoverGroupRow = memo(function LeftoverGroupRow({
   const [open, setOpen] = useState(false)
   const checkbox = useRef<HTMLInputElement>(null)
   const protectedCount = group.items.length - group.selectableIds.length
+  const selectableIds = group.selectableIds.filter((id) => outcomes.get(id)?.status !== 'trashed')
+  const selectedCount = selectableIds.filter((id) => selected.has(id)).length
+  const groupOutcome = mostImportantOutcome(
+    group.items
+      .map((item) => outcomes.get(item.id))
+      .filter((result): result is RemovalResult => !!result)
+  )
+  const affectedCount = group.items.filter((item) => outcomes.has(item.id)).length
   useEffect(() => {
     if (checkbox.current)
-      checkbox.current.indeterminate =
-        selectedCount > 0 && selectedCount < group.selectableIds.length
-  }, [selectedCount, group.selectableIds.length])
+      checkbox.current.indeterminate = selectedCount > 0 && selectedCount < selectableIds.length
+  }, [selectedCount, selectableIds.length])
   return (
-    <article className="leftover grouped-leftover">
+    <article
+      className={`leftover grouped-leftover${groupOutcome ? ` outcome-${groupOutcome.status}` : ''}`}
+    >
       <div className="group-header">
         <label>
           <input
@@ -1220,13 +1339,15 @@ const LeftoverGroupRow = memo(function LeftoverGroupRow({
             type="checkbox"
             aria-label={`Select all selectable ${group.name} paths`}
             title={
-              !group.selectableIds.length
-                ? 'Unavailable: all paths are protected or incompletely measured.'
+              !selectableIds.length
+                ? group.selectableIds.length
+                  ? 'All selectable paths were moved to Trash. Rescan to update this group.'
+                  : 'Unavailable: all paths are protected or incompletely measured.'
                 : 'Select all selectable paths in this group'
             }
-            disabled={!!busy || !group.selectableIds.length}
-            checked={group.selectableIds.length > 0 && selectedCount === group.selectableIds.length}
-            onChange={() => onToggleGroup(group.selectableIds)}
+            disabled={!!busy || !selectableIds.length}
+            checked={selectableIds.length > 0 && selectedCount === selectableIds.length}
+            onChange={() => onToggleGroup(selectableIds)}
           />
         </label>
         <div className="leftover-body">
@@ -1247,6 +1368,14 @@ const LeftoverGroupRow = memo(function LeftoverGroupRow({
               <span className="badge amber">Uncertain owner</span>
             )}
             {protectedCount > 0 && <span className="badge">{protectedCount} protected</span>}
+            <OutcomeTag
+              result={groupOutcome}
+              label={
+                groupOutcome && affectedCount < group.items.length
+                  ? `${affectedCount} of ${group.items.length} paths: ${outcomeLabel(groupOutcome.status)}`
+                  : undefined
+              }
+            />
             <strong
               title={`${group.bytes.toLocaleString()} bytes across ${group.items.length} paths`}
             >
@@ -1266,40 +1395,53 @@ const LeftoverGroupRow = memo(function LeftoverGroupRow({
               ? `${group.items.map((item) => formatBytes(item.bytes)).join(' + ')} ≈ ${formatBytes(group.bytes)} total`
               : `${group.bytes.toLocaleString()} bytes total across ${group.items.length} paths`}
           </p>
-          {group.items.map((item) => (
-            <div className="group-path" key={item.id}>
-              <label>
-                <input
-                  type="checkbox"
-                  aria-label={`Select ${item.path}`}
-                  title={
-                    !removable(item)
-                      ? 'Unavailable: this item is protected or incompletely measured.'
-                      : 'Select this path'
-                  }
-                  disabled={!!busy || !removable(item)}
-                  checked={selected.has(item.id)}
-                  onChange={() => onToggle(item.id)}
-                />
-              </label>
-              <div className="group-path-body">
-                <code>{item.path}</code>
-                <p>
-                  {categoryNames[item.category]} · Latest observed file change:{' '}
-                  {date(item.latestChange)}
-                  {!removable(item) ? ' · Protected' : ''}
-                </p>
-                <p>{item.reason}</p>
+          {group.items.map((item) => {
+            const outcome = outcomes.get(item.id)
+            return (
+              <div
+                className={`group-path${outcome ? ` outcome-${outcome.status}` : ''}`}
+                key={item.id}
+              >
+                <label>
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${item.path}`}
+                    title={
+                      outcome?.status === 'trashed'
+                        ? 'Already moved to Trash. Rescan to update this path.'
+                        : !removable(item)
+                          ? 'Unavailable: this item is protected or incompletely measured.'
+                          : 'Select this path'
+                    }
+                    disabled={!!busy || !removable(item) || outcome?.status === 'trashed'}
+                    checked={selected.has(item.id)}
+                    onChange={() => onToggle(item.id)}
+                  />
+                </label>
+                <div className="group-path-body">
+                  <code>{item.path}</code>
+                  <OutcomeTag result={outcome} />
+                  <p>
+                    {categoryNames[item.category]} · Latest observed file change:{' '}
+                    {date(item.latestChange)}
+                    {!removable(item) ? ' · Protected' : ''}
+                  </p>
+                  <p>{item.reason}</p>
+                </div>
+                <strong>
+                  {formatBytes(item.bytes)}
+                  {item.partial ? ' · partial' : ''}
+                </strong>
+                <button
+                  className="text-button"
+                  disabled={!!busy || outcome?.status === 'trashed'}
+                  onClick={() => onReveal(item)}
+                >
+                  Show in Finder ↗
+                </button>
               </div>
-              <strong>
-                {formatBytes(item.bytes)}
-                {item.partial ? ' · partial' : ''}
-              </strong>
-              <button className="text-button" disabled={!!busy} onClick={() => onReveal(item)}>
-                Show in Finder ↗
-              </button>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </article>
@@ -1309,12 +1451,14 @@ const PathList = memo(function PathList({
   title,
   caption,
   items,
+  outcomes,
   busy,
   onReveal
 }: {
   title: string
   caption: string
   items: ScanItem[]
+  outcomes: Map<string, RemovalResult>
   busy: boolean
   onReveal: (item: ScanItem) => void
 }) {
@@ -1325,7 +1469,15 @@ const PathList = memo(function PathList({
         {title} <span>{caption}</span>
       </summary>
       {open &&
-        items.map((item) => <PathItem key={item.id} item={item} busy={busy} onReveal={onReveal} />)}
+        items.map((item) => (
+          <PathItem
+            key={item.id}
+            item={item}
+            outcome={outcomes.get(item.id)}
+            busy={busy}
+            onReveal={onReveal}
+          />
+        ))}
     </details>
   )
 })

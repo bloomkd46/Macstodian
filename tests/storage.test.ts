@@ -868,7 +868,39 @@ describe('removal review, confirmation and revalidation', () => {
     expect(results.map((result) => result.status)).toEqual(['trashed', 'trashed'])
     expect(trash.mock.calls[0]?.[0]).toBe(appPath)
     await expect(service.confirm(plan.id)).rejects.toThrow('expired')
-    await expect(service.review(request)).rejects.toThrow('Stale')
+    await expect(service.review(request)).rejects.toThrow('moved to Trash')
+  })
+  it('keeps unchanged apps reviewable after another app is moved to Trash', async () => {
+    await bundle('Acme', 'dev.acme.Editor')
+    await bundle('Second', 'dev.second.App')
+    await bundle('Third', 'dev.third.App')
+    const snapshot = await scan(config, platform)
+    const trash = vi.fn(async (_path: string) => {})
+    const service = new RemovalService(config, platform, trash)
+    service.setSnapshot(snapshot)
+    const first = snapshot.view.apps.find((app) => app.name === 'Acme')!
+    const second = snapshot.view.apps.find((app) => app.name === 'Second')!
+    const third = snapshot.view.apps.find((app) => app.name === 'Third')!
+    const review = (app: typeof first) =>
+      service.review({ scanId: snapshot.view.id, appId: app.id, itemIds: [app.bundleItemId] })
+    expect((await service.confirm((await review(first)).id))[0]?.status).toBe('trashed')
+    await expect(review(first)).rejects.toThrow('moved to Trash')
+    await expect(service.reveal(snapshot.view.id, first.bundleItemId)).rejects.toThrow(
+      'moved to Trash'
+    )
+    await file(join(third.path, 'Contents/MacOS/app'), 'changed since scanning')
+    await expect(review(third)).rejects.toThrow('changed since scanning')
+    expect((await service.confirm((await review(second)).id))[0]?.status).toBe('trashed')
+    expect(trash).toHaveBeenCalledTimes(2)
+  })
+  it('allows a failed permission attempt to be reviewed again without rescanning', async () => {
+    const { service, trash, request } = await setup()
+    trash.mockRejectedValueOnce(new Error('EACCES: permission denied'))
+    const result = await service.confirm((await service.review(request)).id)
+    expect(result.map((item) => item.status)).toEqual(['failed', 'skipped'])
+    expect(result[0]?.message).toContain('permission denied')
+    const retry = await service.review(request)
+    expect((await service.confirm(retry.id)).every((item) => item.status === 'trashed')).toBe(true)
   })
   it('stops before all app data if trashing the bundle fails', async () => {
     const { service, trash, request } = await setup()
